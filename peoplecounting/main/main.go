@@ -8,7 +8,7 @@ import (
 	console "github.com/AsynkronIT/goconsole"
 	"github.com/AsynkronIT/protoactor-go/actor"
 	"github.com/AsynkronIT/protoactor-go/persistence"
-	pdb "github.com/dumacp/actors/persistence"
+	pdb "github.com/dumacp/go-actors/persistence"
 	"github.com/dumacp/go-hikvision/peoplecounting"
 	"github.com/dumacp/go-hikvision/peoplecounting/messages"
 	"github.com/golang/protobuf/proto"
@@ -67,26 +67,20 @@ func main() {
 	rootContext := actor.EmptyRootContext
 	props := actor.PropsFromProducer(func() actor.Actor { return &peoplecounting.CountingActor{} }).WithReceiverMiddleware(persistence.Using(provider))
 	pid, _ := rootContext.SpawnNamed(props, "persistent")
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 3})
-	rootContext.Send(pid, &messages.Event{Type: messages.OUTPUT, Value: 2})
 
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 3})
-	rootContext.Send(pid, &messages.Event{Type: messages.OUTPUT, Value: 2})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
-	rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 3})
-	rootContext.Send(pid, &messages.Event{Type: messages.OUTPUT, Value: 2})
+	for i := 0; i < 100*1024; i++ {
+		rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
+		rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
+		rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
+		rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 1})
+		rootContext.Send(pid, &messages.Event{Type: messages.INPUT, Value: 3})
+		rootContext.Send(pid, &messages.Event{Type: messages.OUTPUT, Value: 2})
+		if i%200 == 0 {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
 
-	time.Sleep(3 * time.Second)
+	// time.Sleep(3 * time.Second)
 
 	rootContext.PoisonFuture(pid).Wait()
 	fmt.Printf("*** restart ***\n")
