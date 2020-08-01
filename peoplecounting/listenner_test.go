@@ -58,8 +58,8 @@ func Test_parseXMLEvent(t *testing.T) {
 				t.Errorf("parseXMLEvent() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if reflect.DeepEqual(got, tt.want) {
-				t.Errorf("parseXMLEvent() = %v, want %v", got, tt.want)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parseXMLEvent() = %#v, want %v", got, tt.want)
 			}
 		})
 	}

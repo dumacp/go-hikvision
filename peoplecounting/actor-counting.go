@@ -9,6 +9,7 @@ import (
 	"github.com/dumacp/go-hikvision/peoplecounting/messages"
 )
 
+//CountingActor struct
 type CountingActor struct {
 	persistence.Mixin
 	inputs  uint32
@@ -26,6 +27,7 @@ type CountingActor struct {
 // }
 // func (snap *Snapshot) ProtoMessage() {}
 
+//Receive function to receive message in actor
 func (a *CountingActor) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
