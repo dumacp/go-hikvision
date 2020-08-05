@@ -100,7 +100,7 @@ func parseXMLEvent(reader io.Reader) (interface{}, error) {
 			return nil, err
 		}
 
-		result = &EventNotificationAlertPeopleConting{
+		result = EventNotificationAlertPeopleConting{
 			eventNotificationAlert,
 			0,
 			people,

@@ -25,3 +25,8 @@ message Snapshot {
 	uint32 Inputs = 1;
 	uint32 Outputs = 2; 
 }
+
+message CountingActor {
+	string Address = 1;
+	string ID = 2;
+}
