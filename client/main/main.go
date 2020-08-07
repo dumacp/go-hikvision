@@ -90,6 +90,8 @@ func main() {
 	// 	errlog.Println(err)
 	// }
 
+	infolog.Printf("back camera counter START --  version: %s\n", showVersion)
+
 	go func() {
 		t1 := time.NewTicker(45 * time.Second)
 		defer t1.Stop()
