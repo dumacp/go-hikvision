@@ -12,25 +12,33 @@ import (
 	"github.com/AsynkronIT/protoactor-go/persistence"
 	"github.com/dumacp/go-hikvision/client"
 	"github.com/dumacp/go-hikvision/client/messages"
+	"golang.org/x/exp/errors/fmt"
 )
 
-// const (
-// 	socket = "0.0.0.0:8888"
-// )
+const (
+	showVersion = "1.0.0"
+)
 
 var debug bool
 var socket string
 var pathdb string
+var version bool
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
 	flag.StringVar(&socket, "socket", ":8088", "socket to listen events")
 	flag.StringVar(&pathdb, "pathdb", "/SD/boltdbs/countingdb", "socket to listen events")
+	flag.BoolVar(&version, "version", false, "show version")
 }
 
 func main() {
 
 	flag.Parse()
+
+	if version {
+		fmt.Printf("version: %s\n", showVersion)
+		os.Exit(2)
+	}
 	initLogs(debug)
 
 	// peoplecounting.Listen(socket, errlog)

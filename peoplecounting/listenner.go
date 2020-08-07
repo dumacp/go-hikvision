@@ -57,7 +57,7 @@ func Listen(quit chan int, socket string, wError *log.Logger) <-chan interface{}
 
 	m := http.NewServeMux()
 	m.HandleFunc("/", h1)
-	m.HandleFunc("/http://192.168.188.23:8088/", h1)
+	// m.HandleFunc("/http://192.168.188.23:8088/", h1)
 
 	srv := &http.Server{
 		Addr:           socket,
