@@ -10,8 +10,11 @@ import (
 type CountingActor struct {
 	persistence.Mixin
 	*Logger
-	inputs  uint32
-	outputs uint32
+	flagRecovering bool
+	inputs         int64
+	outputs        int64
+	rawInputs      int64
+	rawOutputs     int64
 
 	pubsub *actor.PID
 	doors  *actor.PID
@@ -36,6 +39,9 @@ func NewCountingActor() *CountingActor {
 // }
 // func (snap *Snapshot) ProtoMessage() {}
 
+//MsgSendRegisters messages to send registers to pubsub
+type MsgSendRegisters struct{}
+
 //Receive function to receive message in actor
 func (a *CountingActor) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
@@ -52,7 +58,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			pubsub.WithDebug()
 		}
 		props1 := actor.PropsFromFunc(pubsub.Receive)
-		pid1, err := actor.SpawnNamed(props1, "pubsub")
+		pid1, err := ctx.SpawnNamed(props1, "pubsub")
 		if err != nil {
 			a.errLog.Panicln(err)
 		}
@@ -66,57 +72,118 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		if a.debug {
 			events.WithDebug()
 		}
-		events.initLogs()
-		props2 := actor.PropsFromFunc(events.Receive)
-		pid2, err := actor.SpawnNamed(props2, "events")
+		props2 := actor.PropsFromProducer(func() actor.Actor { return events })
+		pid2, err := ctx.SpawnNamed(props2, "events")
 		if err != nil {
 			a.errLog.Panicln(err)
 		}
 		a.events = pid2
 
 		props3 := actor.PropsFromProducer(func() actor.Actor { return &DoorsActor{} })
-		pid3, err := actor.SpawnNamed(props3, "doors")
+		pid3, err := ctx.SpawnNamed(props3, "doors")
 		if err != nil {
 			a.errLog.Panicln(err)
 		}
 		a.doors = pid3
 
 	case *persistence.RequestSnapshot:
-		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v'\n",
+		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v\n",
+			a.inputs, a.outputs, a.rawInputs, a.rawOutputs)
+		snap := &messages.Snapshot{
+			Inputs:     a.inputs,
+			Outputs:    a.outputs,
+			RawInputs:  a.rawInputs,
+			RawOutputs: a.rawOutputs,
+		}
+		a.PersistSnapshot(snap)
+		ctx.Send(a.pubsub, snap)
+
+	case *MsgSendRegisters:
+		if a.outputs <= 0 && a.inputs <= 0 {
+			break
+		}
+		snap := &messages.Snapshot{
+			Inputs:     a.inputs,
+			Outputs:    a.outputs,
+			RawInputs:  a.rawInputs,
+			RawOutputs: a.rawOutputs,
+		}
+		ctx.Send(a.pubsub, snap)
+
+	case *messages.Snapshot:
+		a.inputs = msg.GetInputs()
+		a.outputs = msg.GetOutputs()
+		a.rawInputs = msg.GetRawInputs()
+		a.rawOutputs = msg.GetRawOutputs()
+		a.infoLog.Printf("recovered from snapshot, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v\n",
+			a.inputs, a.outputs, a.rawInputs, a.rawOutputs)
+		// ctx.Send(a.pubsub, msg)
+	case *persistence.ReplayComplete:
+		a.infoLog.Printf("replay completed, internal state changed to:\n\tinputs -> '%v', outputs -> '%v'\n",
 			a.inputs, a.outputs)
 		snap := &messages.Snapshot{
 			Inputs:  a.inputs,
 			Outputs: a.outputs,
 		}
-		a.PersistSnapshot(snap)
+		// a.PersistSnapshot(snap)
 		ctx.Send(a.pubsub, snap)
-	case *messages.Snapshot:
-		a.inputs = msg.GetInputs()
-		a.outputs = msg.GetOutputs()
-		a.infoLog.Printf("recovered from snapshot, internal state changed to:\n\tinputs -> '%v', outputs -> '%v'\n",
-			a.inputs, a.outputs)
-		ctx.Send(a.pubsub, msg)
-	case *persistence.ReplayComplete:
-		a.infoLog.Printf("replay completed, internal state changed to:\n\tinputs -> '%v', outputs -> '%v'\n",
-			a.inputs, a.outputs)
 	case *messages.Event:
-		scenario := "received replayed event"
-		if !a.Recovering() {
-			a.PersistReceive(msg)
-			scenario = "received new message"
+		if a.Recovering() {
+			a.flagRecovering = true
+			scenario := "received replayed event"
+			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
+				scenario, a.inputs, a.outputs)
+			break
 		}
-		if msg.GetType() == messages.INPUT {
-			a.inputs += msg.GetValue()
-		} else {
-			a.outputs += msg.GetValue()
+		if a.flagRecovering {
+			a.flagRecovering = false
+			snap := &messages.Snapshot{
+				Inputs:     a.inputs,
+				Outputs:    a.outputs,
+				RawInputs:  a.rawInputs,
+				RawOutputs: a.rawOutputs,
+			}
+			a.PersistSnapshot(snap)
 		}
+		a.PersistReceive(msg)
+		scenario := "received new message"
 		a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
 			scenario, a.inputs, a.outputs)
+
+		// a.buildLog.Printf("data ->'%v', rawinputs -> '%v', rawoutputs -> '%v' \n",
+		// 	msg.GetValue(), a.rawInputs, a.rawOutputs)
+		switch msg.GetType() {
+		case messages.INPUT:
+			diff := msg.GetValue() - a.rawInputs
+			if diff > 0 {
+				a.inputs += diff
+				ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: diff})
+			} else if diff < 0 {
+				a.inputs += msg.GetValue()
+				ctx.Send(a.events, msg)
+			}
+			a.rawInputs = msg.GetValue()
+		case messages.OUTPUT:
+			diff := msg.GetValue() - a.rawOutputs
+			if diff > 0 {
+				a.outputs += diff
+				ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: diff})
+			} else if diff < 0 {
+				a.outputs += msg.GetValue()
+				ctx.Send(a.events, msg)
+			}
+			a.rawOutputs = msg.GetValue()
+		case messages.SCENE:
+			a.warnLog.Println("scenechangedetection")
+			ctx.Send(a.events, msg)
+		}
+
 	case *msgDoor:
 		ctx.Send(a.events, msg)
 	case *msgGPS:
 		ctx.Send(a.events, msg)
 	case *msgEvent:
+		// a.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
 		ctx.Send(a.pubsub, msg)
 	case *actor.Terminated:
 		a.warnLog.Printf("actor terminated: %s", msg.GetWho().GetAddress())

@@ -45,7 +45,16 @@ func (act *EventActor) Receive(ctx actor.Context) {
 		act.initLogs()
 		act.infoLog.Printf("actor started \"%s\"", ctx.Self().Id)
 	case *messages.Event:
-		event := buildEvent(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+		act.buildLog.Printf("\"%s\" - event -> '%v'\n", ctx.Self().GetId(), msg)
+		var event []byte
+		switch msg.Type {
+		case messages.INPUT:
+			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+		case messages.OUTPUT:
+			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+		case messages.SCENE:
+			event = buildEventScene(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+		}
 		ctx.Send(ctx.Parent(), &msgEvent{data: event})
 	case *msgGPS:
 		mem := captureGPS(msg.data)
@@ -88,10 +97,10 @@ func captureGPS(gps []byte) memoryGPS {
 	return memory
 }
 
-func buildEvent(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
+func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
 	tn := time.Now()
 
-	contadores := []uint32{0, 0}
+	contadores := []int64{0, 0}
 	if v.Type == messages.INPUT {
 		contadores[0] = v.Value
 	} else if v.Type == messages.OUTPUT {
@@ -120,15 +129,63 @@ func buildEvent(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, pue
 	}
 
 	val := struct {
-		Coord    string   `json:"coord"`
-		ID       int      `json:"id"`
-		State    uint     `json:"state"`
-		Counters []uint32 `json:"counters"`
+		Coord    string  `json:"coord"`
+		ID       int     `json:"id"`
+		State    uint    `json:"state"`
+		Counters []int64 `json:"counters"`
 	}{
 		frame,
 		1,
 		doorState,
 		contadores[0:2],
+	}
+	message.Value = val
+
+	msg, err := json.Marshal(message)
+	if err != nil {
+		log.errLog.Println(err)
+	}
+	log.buildLog.Printf("%s\n", msg)
+
+	return msg
+}
+
+func buildEventScene(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
+	tn := time.Now()
+
+	if v.Type != messages.SCENE {
+		return nil
+	}
+	frame := ""
+
+	if mem1.timestamp > mem2.timestamp {
+		if mem1.timestamp+30 > tn.Unix() {
+			frame = mem1.frame
+		}
+	} else {
+		if mem2.timestamp+30 > tn.Unix() {
+			frame = mem2.frame
+		}
+	}
+
+	doorState := uint(0)
+	if vm, ok := puerta[gpioPuerta2]; ok {
+		doorState = vm
+	}
+
+	message := &pubsub.Message{
+		Timestamp: float64(time.Now().UnixNano()) / 1000000000,
+		Type:      "BACKTAMPERING",
+	}
+
+	val := struct {
+		Coord string `json:"coord"`
+		ID    int    `json:"id"`
+		State uint   `json:"state"`
+	}{
+		frame,
+		1,
+		doorState,
 	}
 	message.Value = val
 

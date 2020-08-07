@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	clietnName   = "go-nmea-actor"
-	topicEvents  = "EVENTS/backcounter"
+	clietnName  = "go-camera-actor"
+	topicEvents = "EVENTS/backcounter"
+	// topicScene   = "EVENTS/scene"
 	topicCounter = "COUNTERBACKDOOR"
 )
 
@@ -35,7 +36,7 @@ func NewPubSubActor() *ActorPubsub {
 }
 
 type register struct {
-	Registers []uint32 `json:"registers"`
+	Registers []int64 `json:"registers"`
 }
 
 //Receive func Receive to actor
@@ -53,12 +54,13 @@ func (act *ActorPubsub) Receive(ctx actor.Context) {
 		act.clientMqtt = clientMqtt
 	case *messages.Snapshot:
 		reg := &register{}
-		reg.Registers = []uint32{msg.Inputs, msg.Outputs}
+		reg.Registers = []int64{msg.Inputs, msg.Outputs}
 		data, err := json.Marshal(reg)
 		if err != nil {
 			act.errLog.Println(err)
 			break
 		}
+		act.buildLog.Printf("data: %q", data)
 		token := act.clientMqtt.Publish(topicCounter, 0, false, data)
 		if ok := token.WaitTimeout(3 * time.Second); !ok {
 			act.clientMqtt.Disconnect(100)
@@ -66,6 +68,7 @@ func (act *ActorPubsub) Receive(ctx actor.Context) {
 		}
 	case *msgEvent:
 		// fmt.Printf("event: %s\n", msg.event)
+		act.buildLog.Printf("data: %q", msg)
 		token := act.clientMqtt.Publish(topicEvents, 0, false, msg.data)
 		if ok := token.WaitTimeout(3 * time.Second); !ok {
 			act.clientMqtt.Disconnect(100)

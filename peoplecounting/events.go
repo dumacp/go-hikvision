@@ -3,8 +3,8 @@ package peoplecounting
 import "encoding/xml"
 
 const (
-	peopleCountingType   = "PeopleCounting"
-	scenechangedetection = "scenechangedetection"
+	PeopleCountingType       = "PeopleCounting"
+	ScenechangedetectionType = "scenechangedetection"
 )
 
 //TimeRange struct
@@ -21,8 +21,8 @@ type RealTime struct {
 //EventChildCounting struct
 type EventChildCounting struct {
 	XMLName xml.Name `xml:"childCounting"`
-	Enter   int      `xml:"enter"`
-	Exit    int      `xml:"exit"`
+	Enter   int64    `xml:"enter"`
+	Exit    int64    `xml:"exit"`
 }
 
 //EventPeopleCounting struct
@@ -32,8 +32,8 @@ type EventPeopleCounting struct {
 	StatisticalMethods string `xml:"statisticalMethods"`
 	// RealTime           RealTime
 	// TimeRange          TimeRange
-	Enter int `xml:"enter"`
-	Exit  int `xml:"exit"`
+	Enter int64 `xml:"enter"`
+	Exit  int64 `xml:"exit"`
 	// Pass      int `xml:"pass,chardata"`
 	RegionsID int `xml:"regionsID"`
 }

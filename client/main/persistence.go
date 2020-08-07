@@ -34,9 +34,9 @@ var parseSnapshot = func(src []byte) proto.Message {
 	return i
 }
 
-func newProvider(snapshotInterval int) (*provider, error) {
+func newProvider(pathdb string, snapshotInterval int) (*provider, error) {
 	db, err := pdb.NewBoltdbProvider(
-		"/tmp/boltdb-counting",
+		pathdb,
 		snapshotInterval,
 		parseEvent,
 		parseSnapshot,

@@ -86,7 +86,10 @@ func parseXMLEvent(reader io.Reader) (interface{}, error) {
 	// 	fmt.Printf("%#v", temp)
 	// }
 
-	if strings.HasPrefix(fmt.Sprintf("%s", eventType), peopleCountingType) {
+	switch eventType {
+	case PeopleCountingType:
+
+		// if strings.HasPrefix(fmt.Sprintf("%s", eventType), peopleCountingType) {
 
 		people := new(EventPeopleCounting)
 		if err := funcGetData(decoder, "peopleCounting", people); err != nil {
@@ -106,6 +109,8 @@ func parseXMLEvent(reader io.Reader) (interface{}, error) {
 			people,
 			child,
 		}
+	case ScenechangedetectionType:
+		result = eventNotificationAlert
 	}
 	return result, nil
 }

@@ -14,14 +14,18 @@ import (
 	"github.com/dumacp/go-hikvision/client/messages"
 )
 
-const (
-	socket = "0.0.0.0:8888"
-)
+// const (
+// 	socket = "0.0.0.0:8888"
+// )
 
 var debug bool
+var socket string
+var pathdb string
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
+	flag.StringVar(&socket, "socket", ":8088", "socket to listen events")
+	flag.StringVar(&pathdb, "pathdb", "/SD/boltdbs/countingdb", "socket to listen events")
 }
 
 func main() {
@@ -31,7 +35,7 @@ func main() {
 
 	// peoplecounting.Listen(socket, errlog)
 
-	provider, err := newProvider(4)
+	provider, err := newProvider(pathdb, 10)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -50,7 +54,7 @@ func main() {
 		errlog.Println(err)
 	}
 
-	listenner := client.NewListen(pidCounting)
+	listenner := client.NewListen(socket, pidCounting)
 	listenner.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog)
 	if debug {
 		listenner.WithDebug()
@@ -62,17 +66,29 @@ func main() {
 		errlog.Println(err)
 	}
 
+	time.Sleep(1 * time.Second)
+
 	rootContext.Send(pidListen, &messages.CountingActor{
 		Address: pidCounting.Address,
 		ID:      pidCounting.Id})
 
-	time.Sleep(10 * time.Second)
+	time.Sleep(3 * time.Second)
 
-	rootContext.PoisonFuture(pidListen).Wait()
-	pidListen, err = rootContext.SpawnNamed(propsListen, "listenner")
-	if err != nil {
-		errlog.Println(err)
-	}
+	rootContext.Send(pidCounting, &client.MsgSendRegisters{})
+
+	// rootContext.PoisonFuture(pidListen).Wait()
+	// pidListen, err = rootContext.SpawnNamed(propsListen, "listenner")
+	// if err != nil {
+	// 	errlog.Println(err)
+	// }
+
+	go func() {
+		t1 := time.NewTicker(45 * time.Second)
+		defer t1.Stop()
+		for range t1.C {
+			rootContext.Send(pidCounting, &client.MsgSendRegisters{})
+		}
+	}()
 
 	finish := make(chan os.Signal, 1)
 	signal.Notify(finish, syscall.SIGINT)

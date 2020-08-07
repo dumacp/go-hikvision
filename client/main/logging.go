@@ -21,7 +21,6 @@ func newLog(debug bool, prefix string, flags int, priority int) *log.Logger {
 
 	logg, err := syslog.NewLogger(syslog.Priority(priority), flags)
 	if err != nil {
-		log.Println("***************** aaaaaaaaaaaa *********")
 		logg = log.New(os.Stderr, prefix, flags)
 	}
 	return logg
