@@ -52,8 +52,8 @@ func (act *EventActor) Receive(ctx actor.Context) {
 			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
 		case messages.OUTPUT:
 			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
-		case messages.SCENE:
-			event = buildEventScene(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+		case messages.TAMPERING:
+			event = buildEventTampering(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
 		}
 		ctx.Send(ctx.Parent(), &msgEvent{data: event})
 	case *msgGPS:
@@ -150,10 +150,10 @@ func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS,
 	return msg
 }
 
-func buildEventScene(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
+func buildEventTampering(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
 	tn := time.Now()
 
-	if v.Type != messages.SCENE {
+	if v.Type != messages.TAMPERING {
 		return nil
 	}
 	frame := ""

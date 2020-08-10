@@ -173,8 +173,8 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				ctx.Send(a.events, msg)
 			}
 			a.rawOutputs = msg.GetValue()
-		case messages.SCENE:
-			a.warnLog.Println("scenechangedetection")
+		case messages.TAMPERING:
+			a.warnLog.Println("shelteralarm")
 			ctx.Send(a.events, msg)
 		}
 

@@ -17,6 +17,7 @@ message Event {
 		INPUT = 0;
 		OUTPUT = 1;
 		SCENE = 2;
+		TAMPERING = 3;
 	}
 	EventType type = 1;
 	int64 value = 2;

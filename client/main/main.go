@@ -16,16 +16,18 @@ import (
 )
 
 const (
-	showVersion = "1.0.0"
+	showVersion = "1.0.1"
 )
 
 var debug bool
+var logStd bool
 var socket string
 var pathdb string
 var version bool
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
+	flag.BoolVar(&logStd, "logStd", false, "log in stderr")
 	flag.StringVar(&socket, "socket", ":8088", "socket to listen events")
 	flag.StringVar(&pathdb, "pathdb", "/SD/boltdbs/countingdb", "socket to listen events")
 	flag.BoolVar(&version, "version", false, "show version")
@@ -39,7 +41,7 @@ func main() {
 		fmt.Printf("version: %s\n", showVersion)
 		os.Exit(2)
 	}
-	initLogs(debug)
+	initLogs(debug, logStd)
 
 	// peoplecounting.Listen(socket, errlog)
 
@@ -63,7 +65,7 @@ func main() {
 	}
 
 	listenner := client.NewListen(socket, pidCounting)
-	listenner.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog)
+	listenner.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 	if debug {
 		listenner.WithDebug()
 	}

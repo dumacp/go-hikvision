@@ -5,6 +5,7 @@ import "encoding/xml"
 const (
 	PeopleCountingType       = "PeopleCounting"
 	ScenechangedetectionType = "scenechangedetection"
+	ShelteralarmType         = "shelteralarm"
 )
 
 //TimeRange struct

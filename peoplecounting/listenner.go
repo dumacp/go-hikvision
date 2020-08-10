@@ -28,13 +28,13 @@ func Listen(quit chan int, socket string, wError *log.Logger) <-chan interface{}
 			// if ok := strings.Contains(name, "Event_Type"); !ok {
 			// 	return
 			// }
-			log.Printf("headers: %v", req.Header)
+			// log.Printf("headers: %v", req.Header)
 			ctype := req.Header.Get("Content-Type")
 			if ok := strings.Contains(ctype, "application/xml"); ok {
 				if err := req.ParseForm(); err != nil {
 					log.Println(err)
 				}
-				log.Printf("Post from website! r.PostFrom = %v\n", req.PostForm)
+				// log.Printf("Post from website! r.PostFrom = %v\n", req.PostForm)
 				reader := req.Body
 				// if err != nil {
 				// 	return

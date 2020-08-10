@@ -57,9 +57,9 @@ type msgListenError struct{}
 func (act *ListenActor) runListen(quit chan int) {
 	events := peoplecounting.Listen(quit, act.socket, act.errLog)
 	for v := range events {
-		// act.buildLog.Printf("listen event: %v\n", v)
+		act.buildLog.Printf("listen event: %#v\n", v)
 		switch event := v.(type) {
-		case peoplecounting.EventNotificationAlertPeopleConting:
+		case *peoplecounting.EventNotificationAlertPeopleConting:
 			enters := event.PeopleCounting.Enter
 			if diff := enters - act.entersBefore; diff > 0 {
 				act.context.Send(act.countingActor, &messages.Event{Type: messages.INPUT, Value: enters})
@@ -70,10 +70,12 @@ func (act *ListenActor) runListen(quit chan int) {
 				act.context.Send(act.countingActor, &messages.Event{Type: messages.OUTPUT, Value: exits})
 			}
 			act.exitsBefore = exits
-		case peoplecounting.EventNotificationAlert:
+		case *peoplecounting.EventNotificationAlert:
 			switch event.EventType {
 			case peoplecounting.ScenechangedetectionType:
 				act.context.Send(act.countingActor, &messages.Event{Type: messages.SCENE, Value: 0})
+			case peoplecounting.ShelteralarmType:
+				act.context.Send(act.countingActor, &messages.Event{Type: messages.TAMPERING, Value: 0})
 			}
 		}
 	}
