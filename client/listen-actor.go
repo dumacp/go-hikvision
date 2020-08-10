@@ -72,8 +72,8 @@ func (act *ListenActor) runListen(quit chan int) {
 			act.exitsBefore = exits
 		case *peoplecounting.EventNotificationAlert:
 			switch event.EventType {
-			case peoplecounting.ScenechangedetectionType:
-				act.context.Send(act.countingActor, &messages.Event{Type: messages.SCENE, Value: 0})
+			// case peoplecounting.ScenechangedetectionType:
+			// 	act.context.Send(act.countingActor, &messages.Event{Type: messages.SCENE, Value: 0})
 			case peoplecounting.ShelteralarmType:
 				act.context.Send(act.countingActor, &messages.Event{Type: messages.TAMPERING, Value: 0})
 			}
