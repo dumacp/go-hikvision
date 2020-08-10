@@ -14,8 +14,8 @@ var (
 	errlog   *log.Logger
 )
 
-func newLog(debug bool, prefix string, flags int, priority int) *log.Logger {
-	if debug {
+func newLog(logStd bool, prefix string, flags int, priority int) *log.Logger {
+	if logStd {
 		return log.New(os.Stderr, prefix, flags)
 	}
 
@@ -26,11 +26,11 @@ func newLog(debug bool, prefix string, flags int, priority int) *log.Logger {
 	return logg
 }
 
-func initLogs(debug bool) {
-	warnlog = newLog(debug, "[ warn ] ", log.LstdFlags, 4)
-	infolog = newLog(debug, "[ info ] ", log.LstdFlags, 6)
-	buildlog = newLog(debug, "[ build ] ", log.LstdFlags, 7)
-	errlog = newLog(debug, "[ error ] ", log.LstdFlags, 3)
+func initLogs(debug, logStd bool) {
+	warnlog = newLog(logStd, "[ warn ] ", log.LstdFlags, 4)
+	infolog = newLog(logStd, "[ info ] ", log.LstdFlags, 6)
+	buildlog = newLog(logStd, "[ build ] ", log.LstdFlags, 7)
+	errlog = newLog(logStd, "[ error ] ", log.LstdFlags, 3)
 	if !debug {
 		buildlog.SetOutput(ioutil.Discard)
 	}
