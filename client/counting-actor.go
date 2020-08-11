@@ -19,6 +19,7 @@ type CountingActor struct {
 	pubsub *actor.PID
 	doors  *actor.PID
 	events *actor.PID
+	ping   *actor.PID
 }
 
 //NewCountingActor create CountingActor
@@ -85,6 +86,13 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			a.errLog.Panicln(err)
 		}
 		a.doors = pid3
+
+		props4 := actor.PropsFromProducer(func() actor.Actor { return &PingActor{} })
+		pid4, err := ctx.SpawnNamed(props4, "ping")
+		if err != nil {
+			a.errLog.Panicln(err)
+		}
+		a.ping = pid4
 
 	case *persistence.RequestSnapshot:
 		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v\n",
@@ -178,6 +186,9 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			ctx.Send(a.events, msg)
 		}
 
+	case *msgPingError:
+		a.warnLog.Printf("camera keep alive error")
+		ctx.Send(a.pubsub, msg)
 	case *msgDoor:
 		ctx.Send(a.events, msg)
 	case *msgGPS:

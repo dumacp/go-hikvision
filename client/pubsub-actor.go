@@ -7,6 +7,7 @@ import (
 
 	"github.com/AsynkronIT/protoactor-go/actor"
 	"github.com/dumacp/go-hikvision/client/messages"
+	"github.com/dumacp/pubsub"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
@@ -70,6 +71,23 @@ func (act *ActorPubsub) Receive(ctx actor.Context) {
 		// fmt.Printf("event: %s\n", msg.event)
 		act.buildLog.Printf("data: %q", msg)
 		token := act.clientMqtt.Publish(topicEvents, 0, false, msg.data)
+		if ok := token.WaitTimeout(3 * time.Second); !ok {
+			act.clientMqtt.Disconnect(100)
+			act.errLog.Panic("MQTT connection failed")
+		}
+	case *msgPingError:
+		// fmt.Printf("event: %s\n", msg.event)
+		message := &pubsub.Message{
+			Timestamp: float64(time.Now().UnixNano()) / 1000000000,
+			Type:      "BackCameraDisconnect",
+			Value:     1,
+		}
+		data, err := json.Marshal(message)
+		if err != nil {
+			break
+		}
+		act.buildLog.Printf("data: %q", data)
+		token := act.clientMqtt.Publish(topicEvents, 0, false, data)
 		if ok := token.WaitTimeout(3 * time.Second); !ok {
 			act.clientMqtt.Disconnect(100)
 			act.errLog.Panic("MQTT connection failed")
