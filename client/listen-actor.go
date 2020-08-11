@@ -39,7 +39,7 @@ func (act *ListenActor) Receive(ctx actor.Context) {
 		act.initLogs()
 		act.infoLog.Printf("actor started \"%s\"", ctx.Self().Id)
 		go act.runListen(act.quit)
-	case *actor.Stopped:
+	case *actor.Stopping:
 		act.warnLog.Println("stopped actor")
 		select {
 		case act.quit <- 1:

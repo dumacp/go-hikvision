@@ -40,6 +40,7 @@ func Listen(quit chan int, socket string, wError *log.Logger) <-chan interface{}
 				// 	return
 				// }
 				event, err := parseXMLEvent(reader)
+				reader.Close()
 				if err != nil {
 					log.Println(err)
 					return
