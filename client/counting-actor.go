@@ -137,27 +137,17 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		ctx.Send(a.pubsub, snap)
 	case *messages.Event:
 		if a.Recovering() {
-			a.flagRecovering = true
+			// a.flagRecovering = true
 			scenario := "received replayed event"
 			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
 				scenario, a.inputs, a.outputs)
-			break
+		} else {
+			a.PersistReceive(msg)
+			scenario := "received new message"
+			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
+				scenario, a.inputs, a.outputs)
 		}
-		if a.flagRecovering {
-			a.flagRecovering = false
-			snap := &messages.Snapshot{
-				Inputs:     a.inputs,
-				Outputs:    a.outputs,
-				RawInputs:  a.rawInputs,
-				RawOutputs: a.rawOutputs,
-			}
-			a.PersistSnapshot(snap)
-		}
-		a.PersistReceive(msg)
-		scenario := "received new message"
-		a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
-			scenario, a.inputs, a.outputs)
-
+		// a.buildLog.Printf("event -> %#v", msg)
 		// a.buildLog.Printf("data ->'%v', rawinputs -> '%v', rawoutputs -> '%v' \n",
 		// 	msg.GetValue(), a.rawInputs, a.rawOutputs)
 		switch msg.GetType() {
@@ -165,26 +155,45 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			diff := msg.GetValue() - a.rawInputs
 			if diff > 0 {
 				a.inputs += diff
-				ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: diff})
+				if !a.Recovering() {
+					ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: diff})
+				}
 			} else if diff < 0 {
 				a.inputs += msg.GetValue()
-				ctx.Send(a.events, msg)
+				if !a.Recovering() {
+					ctx.Send(a.events, msg)
+				}
 			}
 			a.rawInputs = msg.GetValue()
 		case messages.OUTPUT:
 			diff := msg.GetValue() - a.rawOutputs
 			if diff > 0 {
 				a.outputs += diff
-				ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: diff})
+				if !a.Recovering() {
+					ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: diff})
+				}
 			} else if diff < 0 {
 				a.outputs += msg.GetValue()
-				ctx.Send(a.events, msg)
+				if !a.Recovering() {
+					ctx.Send(a.events, msg)
+				}
 			}
 			a.rawOutputs = msg.GetValue()
 		case messages.TAMPERING:
 			a.warnLog.Println("shelteralarm")
 			ctx.Send(a.events, msg)
 		}
+
+		// if a.flagRecovering {
+		// 	a.flagRecovering = false
+		// 	snap := &messages.Snapshot{
+		// 		Inputs:     a.inputs,
+		// 		Outputs:    a.outputs,
+		// 		RawInputs:  a.rawInputs,
+		// 		RawOutputs: a.rawOutputs,
+		// 	}
+		// 	a.PersistSnapshot(snap)
+		// }
 
 	case *msgPingError:
 		a.warnLog.Printf("camera keep alive error")
