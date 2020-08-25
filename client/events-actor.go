@@ -175,7 +175,7 @@ func buildEventTampering(ctx actor.Context, v *messages.Event, mem1, mem2 *memor
 
 	message := &pubsub.Message{
 		Timestamp: float64(time.Now().UnixNano()) / 1000000000,
-		Type:      "BACKTAMPERING",
+		Type:      "TAMPERING",
 	}
 
 	val := struct {
