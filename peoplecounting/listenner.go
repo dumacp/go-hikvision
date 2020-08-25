@@ -14,6 +14,7 @@ func Listen(quit chan int, socket string, wError *log.Logger) <-chan interface{}
 
 	ch := make(chan interface{})
 	h1 := func(w http.ResponseWriter, req *http.Request) {
+		defer req.Body.Close()
 		switch req.Method {
 		case http.MethodPost:
 			// disp := req.Header.Get("Content-Disposition")
@@ -31,15 +32,17 @@ func Listen(quit chan int, socket string, wError *log.Logger) <-chan interface{}
 			// log.Printf("headers: %v", req.Header)
 			ctype := req.Header.Get("Content-Type")
 			if ok := strings.Contains(ctype, "application/xml"); ok {
-				if err := req.ParseForm(); err != nil {
-					log.Println(err)
-				}
+				// if err := req.ParseForm(); err != nil {
+				// 	log.Println(err)
+				// }
 				// log.Printf("Post from website! r.PostFrom = %v\n", req.PostForm)
 				reader := req.Body
+
 				// if err != nil {
 				// 	return
 				// }
 				event, err := parseXMLEvent(reader)
+				// req.Body.Close()
 				reader.Close()
 				if err != nil {
 					log.Println(err)
