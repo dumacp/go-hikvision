@@ -61,7 +61,7 @@ func main() {
 	propsCounting := actor.PropsFromProducer(func() actor.Actor { return counting }).WithReceiverMiddleware(persistence.Using(provider))
 	pidCounting, err := rootContext.SpawnNamed(propsCounting, "counting")
 	if err != nil {
-		errlog.Println(err)
+		errlog.Panicln(err)
 	}
 
 	listenner := client.NewListen(socket, pidCounting)
@@ -73,7 +73,7 @@ func main() {
 	propsListen := actor.PropsFromFunc(listenner.Receive)
 	pidListen, err := rootContext.SpawnNamed(propsListen, "listenner")
 	if err != nil {
-		errlog.Println(err)
+		errlog.Panicln(err)
 	}
 
 	time.Sleep(1 * time.Second)

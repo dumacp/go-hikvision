@@ -79,7 +79,7 @@ func (act *ActorPubsub) Receive(ctx actor.Context) {
 		// fmt.Printf("event: %s\n", msg.event)
 		message := &pubsub.Message{
 			Timestamp: float64(time.Now().UnixNano()) / 1000000000,
-			Type:      "CameraDisconnect",
+			Type:      "CounterDisconnected",
 			Value:     1,
 		}
 		data, err := json.Marshal(message)
