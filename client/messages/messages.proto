@@ -34,3 +34,32 @@ message CountingActor {
 	string Address = 1;
 	string ID = 2;
 }
+
+message CameraConfig {
+	string Url = 1;
+	string Hostname = 2;
+	string Port = 3;
+	string IP = 4;
+}
+
+
+
+//Service interface
+message Start {}
+
+message Stop {}
+
+message Restart {}
+
+message StatusRequest {}
+message StatusResponse {
+    string state = 1;
+}
+
+message InfoCounterRequest {}
+message InfoCounterResponse {
+    int64 Inputs = 1;
+    int64 Outputs = 2;
+}
+
+

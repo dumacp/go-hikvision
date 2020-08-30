@@ -201,9 +201,9 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 	case *msgDoor:
 		ctx.Send(a.events, msg)
 	case *msgGPS:
+		// a.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
 		ctx.Send(a.events, msg)
 	case *msgEvent:
-		// a.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
 		ctx.Send(a.pubsub, msg)
 	case *actor.Terminated:
 		a.warnLog.Printf("actor terminated: %s", msg.GetWho().GetAddress())

@@ -57,12 +57,16 @@ func (act *EventActor) Receive(ctx actor.Context) {
 		}
 		ctx.Send(ctx.Parent(), &msgEvent{data: event})
 	case *msgGPS:
+		// act.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
 		mem := captureGPS(msg.data)
-		if mem.typeM == gngnsType {
+		// act.buildLog.Printf("mem, %v", mem)
+		switch mem.typeM {
+		case gprmctype:
 			act.mem1 = &mem
-		} else if mem.typeM == gngnsType {
+		case gngnsType:
 			act.mem2 = &mem
 		}
+		// act.buildLog.Printf("memorys 1, %v, %v", act.mem1, act.mem2)
 	case *msgDoor:
 		act.puertas[msg.id] = msg.value
 	case *actor.Stopped:
@@ -85,6 +89,7 @@ func captureGPS(gps []byte) memoryGPS {
 	// for v := range chGPS {
 	memory := memoryGPS{}
 	if bytes.Contains(gps, []byte("GPRMC")) {
+
 		memory.typeM = gprmctype
 		memory.frame = string(gps)
 		memory.timestamp = time.Now().Unix()
@@ -100,6 +105,7 @@ func captureGPS(gps []byte) memoryGPS {
 func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
 	tn := time.Now()
 
+	log.buildLog.Printf("memorys, %v, %v", mem1, mem2)
 	contadores := []int64{0, 0}
 	if v.Type == messages.INPUT {
 		contadores[0] = v.Value
@@ -108,15 +114,15 @@ func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS,
 	}
 	frame := ""
 
-	if mem1.timestamp > mem2.timestamp {
-		if mem1.timestamp+30 > tn.Unix() {
-			frame = mem1.frame
-		}
-	} else {
-		if mem2.timestamp+30 > tn.Unix() {
-			frame = mem2.frame
-		}
+	// if mem1.timestamp > mem2.timestamp {
+	if mem1.timestamp+30 > tn.Unix() {
+		frame = mem1.frame
+		// }
+	} else if mem2.timestamp+30 > tn.Unix() {
+		frame = mem2.frame
+		// }
 	}
+	log.buildLog.Printf("frame, %v", frame)
 
 	doorState := uint(0)
 	if vm, ok := puerta[gpioPuerta2]; ok {

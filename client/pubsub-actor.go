@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/AsynkronIT/protoactor-go/actor"
@@ -25,6 +26,7 @@ type msgGPS struct {
 //ActorPubsub actor to send mesages to MQTTT broket
 type ActorPubsub struct {
 	*Logger
+	ctx        actor.Context
 	clientMqtt MQTT.Client
 	debug      bool
 }
@@ -42,17 +44,20 @@ type register struct {
 
 //Receive func Receive to actor
 func (act *ActorPubsub) Receive(ctx actor.Context) {
+	act.ctx = ctx
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		act.initLogs()
-		act.infoLog.Printf("actor started \"%s\"", ctx.Self().Id)
-		chGPS := make(chan []byte, 0)
-		clientMqtt, err := connectMqtt(chGPS)
+
+		clientMqtt, err := connectMqtt(act.ctx)
 		if err != nil {
+			time.Sleep(3 * time.Second)
 			panic(err)
 		}
-
 		act.clientMqtt = clientMqtt
+		act.infoLog.Printf("actor started \"%s\"", ctx.Self().Id)
+	case *actor.Stopping:
+		act.clientMqtt.Disconnect(100)
 	case *messages.Snapshot:
 		reg := &register{}
 		reg.Registers = []int64{msg.Inputs, msg.Outputs}
@@ -95,25 +100,38 @@ func (act *ActorPubsub) Receive(ctx actor.Context) {
 	}
 }
 
-func onMessageWithChannel(ch chan []byte) func(c MQTT.Client, msg MQTT.Message) {
+func onMessageWithChannel(ctx actor.Context) func(c MQTT.Client, msg MQTT.Message) {
 	onMessage := func(c MQTT.Client, msg MQTT.Message) {
-		select {
-		case ch <- msg.Payload():
-		case <-time.After(3 * time.Second):
-		}
+		// log.Printf("topic: %s, payload: %s", msg.Topic(), msg.Payload())
+
+		ctx.Send(ctx.Parent(), &msgGPS{data: msg.Payload()})
 	}
 	return onMessage
 }
 
-func connectMqtt(ch chan []byte) (MQTT.Client, error) {
+func connectMqtt(ctx actor.Context) (MQTT.Client, error) {
 	opts := MQTT.NewClientOptions().AddBroker("tcp://127.0.0.1:1883")
 	opts.SetClientID(clietnName)
-	opts.SetAutoReconnect(true)
+	opts.SetAutoReconnect(false)
+	// opts.SetDefaultPublishHandler(onMessageWithChannel(act.ctx))
 	conn := MQTT.NewClient(opts)
-	conn.Subscribe("GPS", 0, onMessageWithChannel(ch))
 	token := conn.Connect()
 	if ok := token.WaitTimeout(30 * time.Second); !ok {
 		return nil, fmt.Errorf("MQTT connection failed")
 	}
+	tokenSubs := conn.Subscribe("GPS", 0, onMessageWithChannel(ctx))
+	if ok := tokenSubs.WaitTimeout(30 * time.Second); !ok {
+		return nil, fmt.Errorf("MQTT connection failed")
+	}
+	log.Println("MQTT connection success")
 	return conn, nil
+}
+
+func (act *ActorPubsub) funcSendGps(ch chan []byte) {
+	go func() {
+		log.Println("listen GPS")
+		for v := range ch {
+			act.ctx.Send(act.ctx.Parent(), &msgGPS{data: v})
+		}
+	}()
 }
