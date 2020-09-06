@@ -18,9 +18,10 @@ const (
 //EventActor type
 type EventActor struct {
 	*Logger
-	mem1    *memoryGPS
-	mem2    *memoryGPS
-	puertas map[uint]uint
+	mem1      *memoryGPS
+	mem2      *memoryGPS
+	puertas   map[uint]uint
+	openState int
 }
 
 //NewEventActor create EventActor
@@ -31,6 +32,11 @@ func NewEventActor() *EventActor {
 	event.mem2 = &memoryGPS{}
 	event.puertas = make(map[uint]uint)
 	return event
+}
+
+//SetOpenState set open state
+func (act *EventActor) SetOpenState(state int) {
+	act.openState = state
 }
 
 type msgEvent struct {
@@ -49,9 +55,9 @@ func (act *EventActor) Receive(ctx actor.Context) {
 		var event []byte
 		switch msg.Type {
 		case messages.INPUT:
-			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.openState, act.Logger)
 		case messages.OUTPUT:
-			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.openState, act.Logger)
 		case messages.TAMPERING:
 			event = buildEventTampering(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
 		}
@@ -69,6 +75,7 @@ func (act *EventActor) Receive(ctx actor.Context) {
 		// act.buildLog.Printf("memorys 1, %v, %v", act.mem1, act.mem2)
 	case *msgDoor:
 		act.puertas[msg.id] = msg.value
+		act.buildLog.Printf("%v\n", msg)
 	case *actor.Stopped:
 		act.infoLog.Println("stoped actor")
 	}
@@ -102,7 +109,7 @@ func captureGPS(gps []byte) memoryGPS {
 	return memory
 }
 
-func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
+func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, doorState int, log *Logger) []byte {
 	tn := time.Now()
 
 	log.buildLog.Printf("memorys, %v, %v", mem1, mem2)
@@ -124,10 +131,11 @@ func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS,
 	}
 	log.buildLog.Printf("frame, %v", frame)
 
-	doorState := uint(0)
-	if vm, ok := puerta[gpioPuerta2]; ok {
-		doorState = vm
-	}
+	// doorState := uint(0)
+	// if vm, ok := puerta[gpioPuerta2]; ok {
+
+	// 	doorState = vm
+	// }
 
 	message := &pubsub.Message{
 		Timestamp: float64(time.Now().UnixNano()) / 1000000000,
@@ -137,7 +145,7 @@ func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS,
 	val := struct {
 		Coord    string  `json:"coord"`
 		ID       int     `json:"id"`
-		State    uint    `json:"state"`
+		State    int     `json:"state"`
 		Counters []int64 `json:"counters"`
 	}{
 		frame,

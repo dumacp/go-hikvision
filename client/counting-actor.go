@@ -11,6 +11,7 @@ type CountingActor struct {
 	persistence.Mixin
 	*Logger
 	flagRecovering bool
+	openState      int
 	inputs         int64
 	outputs        int64
 	rawInputs      int64
@@ -27,6 +28,15 @@ func NewCountingActor() *CountingActor {
 	count := &CountingActor{}
 	count.Logger = &Logger{}
 	return count
+}
+
+//SetZeroOpenState set the open state in gpio door
+func (a *CountingActor) SetZeroOpenState(state bool) {
+	if state {
+		a.openState = 0
+	} else {
+		a.openState = 1
+	}
 }
 
 // type Snapshot struct {
@@ -66,6 +76,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		a.pubsub = pid1
 
 		events := NewEventActor()
+		events.openState = a.openState
 		events.SetLogError(a.errLog).
 			SetLogWarn(a.warnLog).
 			SetLogInfo(a.infoLog).

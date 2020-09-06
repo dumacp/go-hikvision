@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.9"
+	showVersion = "1.0.10"
 )
 
 var debug bool
@@ -25,12 +25,15 @@ var socket string
 var pathdb string
 var version bool
 
+var isZeroOpenState bool
+
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
 	flag.BoolVar(&logStd, "logStd", false, "log in stderr")
 	flag.StringVar(&socket, "socket", ":8088", "socket to listen events")
 	flag.StringVar(&pathdb, "pathdb", "/SD/boltdbs/countingdb", "socket to listen events")
 	flag.BoolVar(&version, "version", false, "show version")
+	flag.BoolVar(&isZeroOpenState, "zeroOpenState", false, "Is Zero the open state?")
 }
 
 func main() {
@@ -53,6 +56,7 @@ func main() {
 	rootContext := actor.EmptyRootContext
 
 	counting := client.NewCountingActor()
+	counting.SetZeroOpenState(isZeroOpenState)
 	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 	if debug {
 		counting.WithDebug()
