@@ -1,0 +1,38 @@
+syntax = "proto3";
+package messages;
+import "github.com/AsynkronIT/protoactor-go/actor/protos.proto";
+
+
+message Start {}
+
+message Stop {}
+
+message Restart {}
+
+message StatusRequest {
+    string Sender = 1;
+}
+message StatusResponse {
+    enum StateType {
+        STARTED = 0;
+        STOPPED = 1;
+        UNKNOWN = 2;
+    }
+    StateType State = 1;
+}
+
+message InfoCounterRequest {
+    string Sender = 1;
+}
+message InfoCounterResponse {
+    int64 Inputs = 1;
+    int64 Outputs = 2;
+}
+
+message AddressCounterRequest {
+    string Sender = 1;
+}
+message AddressCounterResponse {
+    string ID = 1;
+    string Addr = 2;
+}

@@ -1,4 +1,4 @@
-package client
+package business
 
 import (
 	"time"
@@ -55,16 +55,11 @@ func (act *ListenActor) Receive(ctx actor.Context) {
 type msgListenError struct{}
 
 func (act *ListenActor) runListen(quit chan int) {
-	first := true
 	events := peoplecounting.Listen(quit, act.socket, act.errLog)
 	for v := range events {
 		act.buildLog.Printf("listen event: %#v\n", v)
 		switch event := v.(type) {
 		case *peoplecounting.EventNotificationAlertPeopleConting:
-			if first {
-				act.infoLog.Printf("initial event -> %+v", event.PeopleCounting)
-				first = false
-			}
 			enters := event.PeopleCounting.Enter
 			if diff := enters - act.entersBefore; diff > 0 {
 				act.context.Send(act.countingActor, &messages.Event{Type: messages.INPUT, Value: enters})

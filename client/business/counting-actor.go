@@ -1,4 +1,4 @@
-package client
+package business
 
 import (
 	"github.com/AsynkronIT/protoactor-go/actor"
@@ -11,7 +11,6 @@ type CountingActor struct {
 	persistence.Mixin
 	*Logger
 	flagRecovering bool
-	openState      int
 	inputs         int64
 	outputs        int64
 	rawInputs      int64
@@ -28,15 +27,6 @@ func NewCountingActor() *CountingActor {
 	count := &CountingActor{}
 	count.Logger = &Logger{}
 	return count
-}
-
-//SetZeroOpenState set the open state in gpio door
-func (a *CountingActor) SetZeroOpenState(state bool) {
-	if state {
-		a.openState = 0
-	} else {
-		a.openState = 1
-	}
 }
 
 // type Snapshot struct {
@@ -76,7 +66,6 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		a.pubsub = pid1
 
 		events := NewEventActor()
-		events.openState = a.openState
 		events.SetLogError(a.errLog).
 			SetLogWarn(a.warnLog).
 			SetLogInfo(a.infoLog).
@@ -138,8 +127,8 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			a.inputs, a.outputs, a.rawInputs, a.rawOutputs)
 		// ctx.Send(a.pubsub, msg)
 	case *persistence.ReplayComplete:
-		a.infoLog.Printf("replay completed, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v\n",
-			a.inputs, a.outputs, a.rawInputs, a.rawOutputs)
+		a.infoLog.Printf("replay completed, internal state changed to:\n\tinputs -> '%v', outputs -> '%v'\n",
+			a.inputs, a.outputs)
 		snap := &messages.Snapshot{
 			Inputs:  a.inputs,
 			Outputs: a.outputs,
@@ -170,13 +159,10 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 					ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: diff})
 				}
 			} else if diff < 0 {
+				a.inputs += msg.GetValue()
 				if !a.Recovering() {
-					a.warnLog.Printf("warning deviation in data -> rawInputs: %d, GetValue() in event: %d", a.rawInputs, msg.GetValue())
+					ctx.Send(a.events, msg)
 				}
-				//a.inputs += msg.GetValue()
-				//if !a.Recovering() {
-				//	ctx.Send(a.events, msg)
-				//}
 			}
 			a.rawInputs = msg.GetValue()
 		case messages.OUTPUT:
@@ -187,13 +173,10 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 					ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: diff})
 				}
 			} else if diff < 0 {
+				a.outputs += msg.GetValue()
 				if !a.Recovering() {
-					a.warnLog.Printf("warning deviation in data -> rawOutputs: %d, GetValue() in event: %d", a.rawOutputs, msg.GetValue())
+					ctx.Send(a.events, msg)
 				}
-				//a.outputs += msg.GetValue()
-				//if !a.Recovering() {
-				//	ctx.Send(a.events, msg)
-				//}
 			}
 			a.rawOutputs = msg.GetValue()
 		case messages.TAMPERING:
@@ -218,9 +201,9 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 	case *msgDoor:
 		ctx.Send(a.events, msg)
 	case *msgGPS:
-		// a.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
 		ctx.Send(a.events, msg)
 	case *msgEvent:
+		// a.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
 		ctx.Send(a.pubsub, msg)
 	case *actor.Terminated:
 		a.warnLog.Printf("actor terminated: %s", msg.GetWho().GetAddress())
