@@ -164,7 +164,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		switch msg.GetType() {
 		case messages.INPUT:
 			diff := msg.GetValue() - a.rawInputs
-			if diff > 0 {
+			if diff > 0 && diff < 10 {
 				a.inputs += diff
 				if !a.Recovering() {
 					ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: diff})
@@ -172,6 +172,9 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			} else if diff < 0 {
 				if !a.Recovering() {
 					a.warnLog.Printf("warning deviation in data -> rawInputs: %d, GetValue() in event: %d", a.rawInputs, msg.GetValue())
+					if msg.GetValue() < 4 {
+						ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: msg.GetValue()})
+					}
 				}
 				//a.inputs += msg.GetValue()
 				//if !a.Recovering() {
@@ -181,7 +184,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			a.rawInputs = msg.GetValue()
 		case messages.OUTPUT:
 			diff := msg.GetValue() - a.rawOutputs
-			if diff > 0 {
+			if diff > 0 && diff < 10 {
 				a.outputs += diff
 				if !a.Recovering() {
 					ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: diff})
@@ -189,6 +192,9 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			} else if diff < 0 {
 				if !a.Recovering() {
 					a.warnLog.Printf("warning deviation in data -> rawOutputs: %d, GetValue() in event: %d", a.rawOutputs, msg.GetValue())
+					if msg.GetValue() < 4 {
+						ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: msg.GetValue()})
+					}
 				}
 				//a.outputs += msg.GetValue()
 				//if !a.Recovering() {

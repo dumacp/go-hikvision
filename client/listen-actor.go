@@ -15,6 +15,7 @@ type ListenActor struct {
 	countingActor *actor.PID
 	entersBefore  int64
 	exitsBefore   int64
+	timeBefore    *time.Time
 
 	quit chan int
 
@@ -54,6 +55,14 @@ func (act *ListenActor) Receive(ctx actor.Context) {
 
 type msgListenError struct{}
 
+func parseDateTime(t1 string) (*time.Time, error) {
+	p1, err := time.Parse(time.RFC3339, t1)
+	if err != nil {
+		return nil, err
+	}
+	return &p1, nil
+}
+
 func (act *ListenActor) runListen(quit chan int) {
 	first := true
 	events := peoplecounting.Listen(quit, act.socket, act.errLog)
@@ -61,6 +70,17 @@ func (act *ListenActor) runListen(quit chan int) {
 		act.buildLog.Printf("listen event: %#v\n", v)
 		switch event := v.(type) {
 		case *peoplecounting.EventNotificationAlertPeopleConting:
+			dateTime, err := parseDateTime(event.DateTime)
+			if err != nil {
+				act.warnLog.Printf("time event error -> %s", err)
+				break
+			}
+			if act.timeBefore != nil && dateTime.Before(*(act.timeBefore)) {
+				act.warnLog.Printf("time event error, events in the past -> new %v, before %v", dateTime, act.timeBefore)
+				break
+			}
+			act.timeBefore = dateTime
+
 			if first {
 				act.infoLog.Printf("initial event -> %+v", event.PeopleCounting)
 				first = false
