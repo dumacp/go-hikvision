@@ -1,6 +1,7 @@
 package client
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/AsynkronIT/protoactor-go/actor"
@@ -56,7 +57,10 @@ func (act *ListenActor) Receive(ctx actor.Context) {
 type msgListenError struct{}
 
 func parseDateTime(t1 string) (*time.Time, error) {
-	p1, err := time.Parse(time.RFC3339, t1)
+	b1 := []byte(t1)
+	re := regexp.MustCompile("([0-9]{4}-[0-9]{1,2}-[0-9]{1,2}T[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2})-([0-9]:00)")
+	b2 := re.ReplaceAll(b1, []byte("${1}-0${2}"))
+	p1, err := time.Parse(time.RFC3339, string(b2))
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +87,7 @@ func (act *ListenActor) runListen(quit chan int) {
 
 			if first {
 				act.infoLog.Printf("initial event -> %+v", event.PeopleCounting)
+				act.infoLog.Printf("initial event -> %+v", event)
 				first = false
 			}
 			enters := event.PeopleCounting.Enter
