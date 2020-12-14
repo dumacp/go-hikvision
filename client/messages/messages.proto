@@ -28,6 +28,8 @@ message Snapshot {
 	int64 Outputs = 2;
 	int64 RawInputs = 3;
 	int64 RawOutputs = 4; 
+	int64 AllInputs = 5;
+	int64 AllOutputs = 6; 
 }
 
 message CountingActor {

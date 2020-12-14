@@ -11,11 +11,14 @@ type CountingActor struct {
 	persistence.Mixin
 	*Logger
 	flagRecovering bool
-	openState      int
+	openState      uint
+	puertas        map[uint]uint
 	inputs         int64
 	outputs        int64
 	rawInputs      int64
 	rawOutputs     int64
+	allInputs      int64
+	allOutputs     int64
 
 	pubsub *actor.PID
 	doors  *actor.PID
@@ -27,6 +30,7 @@ type CountingActor struct {
 func NewCountingActor() *CountingActor {
 	count := &CountingActor{}
 	count.Logger = &Logger{}
+	count.puertas = make(map[uint]uint)
 	return count
 }
 
@@ -106,13 +110,15 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		a.ping = pid4
 
 	case *persistence.RequestSnapshot:
-		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v\n",
-			a.inputs, a.outputs, a.rawInputs, a.rawOutputs)
+		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
+			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
 		snap := &messages.Snapshot{
 			Inputs:     a.inputs,
 			Outputs:    a.outputs,
 			RawInputs:  a.rawInputs,
 			RawOutputs: a.rawOutputs,
+			AllInputs:  a.allInputs,
+			AllOutputs: a.allOutputs,
 		}
 		a.PersistSnapshot(snap)
 		ctx.Send(a.pubsub, snap)
@@ -134,12 +140,21 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		a.outputs = msg.GetOutputs()
 		a.rawInputs = msg.GetRawInputs()
 		a.rawOutputs = msg.GetRawOutputs()
-		a.infoLog.Printf("recovered from snapshot, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v\n",
-			a.inputs, a.outputs, a.rawInputs, a.rawOutputs)
+		a.allInputs = msg.GetAllInputs()
+		a.allOutputs = msg.GetAllOutputs()
+
+		if a.allInputs < a.inputs {
+			a.allInputs = a.inputs
+		}
+		if a.allOutputs < a.outputs {
+			a.allOutputs = a.outputs
+		}
+		a.infoLog.Printf("recovered from snapshot, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
+			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
 		// ctx.Send(a.pubsub, msg)
 	case *persistence.ReplayComplete:
-		a.infoLog.Printf("replay completed, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v\n",
-			a.inputs, a.outputs, a.rawInputs, a.rawOutputs)
+		a.infoLog.Printf("replay completed, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
+			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
 		snap := &messages.Snapshot{
 			Inputs:  a.inputs,
 			Outputs: a.outputs,
@@ -165,15 +180,22 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		case messages.INPUT:
 			diff := msg.GetValue() - a.rawInputs
 			if diff > 0 && diff < 10 {
-				a.inputs += diff
-				if !a.Recovering() {
-					ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: diff})
+				if v, ok := a.puertas[gpioPuerta2]; !ok || v != a.openState {
+					a.warnLog.Printf("counting inputs when door is closed, count: %v", diff)
+				} else {
+					a.inputs += diff
+					if !a.Recovering() {
+						ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: diff})
+					}
 				}
+				a.allInputs += diff
 			} else if diff < 0 {
 				if !a.Recovering() {
 					a.warnLog.Printf("warning deviation in data -> rawInputs: %d, GetValue() in event: %d", a.rawInputs, msg.GetValue())
 					if msg.GetValue() < 4 {
 						ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: msg.GetValue()})
+						a.inputs += msg.GetValue()
+						a.allInputs += msg.GetValue()
 					}
 				}
 				//a.inputs += msg.GetValue()
@@ -185,15 +207,23 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		case messages.OUTPUT:
 			diff := msg.GetValue() - a.rawOutputs
 			if diff > 0 && diff < 10 {
-				a.outputs += diff
-				if !a.Recovering() {
-					ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: diff})
+				//TODO: back door allways!
+				if v, ok := a.puertas[gpioPuerta2]; !ok || v != a.openState {
+					a.warnLog.Printf("counting outputs when door is closed, count: %v", diff)
+				} else {
+					a.outputs += diff
+					if !a.Recovering() {
+						ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: diff})
+					}
 				}
+				a.allOutputs += diff
 			} else if diff < 0 {
 				if !a.Recovering() {
 					a.warnLog.Printf("warning deviation in data -> rawOutputs: %d, GetValue() in event: %d", a.rawOutputs, msg.GetValue())
 					if msg.GetValue() < 4 {
 						ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: msg.GetValue()})
+						a.outputs += msg.GetValue()
+						a.allOutputs += msg.GetValue()
 					}
 				}
 				//a.outputs += msg.GetValue()
@@ -223,6 +253,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		ctx.Send(a.pubsub, msg)
 	case *msgDoor:
 		ctx.Send(a.events, msg)
+		a.puertas[msg.id] = msg.value
 	case *msgGPS:
 		// a.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
 		ctx.Send(a.events, msg)
