@@ -2,6 +2,7 @@ package client
 
 import (
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/AsynkronIT/protoactor-go/actor"
@@ -69,11 +70,15 @@ func parseDateTime(t1 string) (*time.Time, error) {
 
 func (act *ListenActor) runListen(quit chan int) {
 	first := true
-	events := peoplecounting.Listen(quit, act.socket, act.errLog)
+	events := peoplecounting.Listen(quit, act.socket, act.errLog, act.cameralog)
 	for v := range events {
 		act.buildLog.Printf("listen event: %#v\n", v)
 		switch event := v.(type) {
 		case *peoplecounting.EventNotificationAlertPeopleConting:
+			if strings.Contains(event.PeopleCounting.StatisticalMethods, "timeRange") {
+				act.warnLog.Printf("event timeRange, events -> %+v", event.PeopleCounting)
+				break
+			}
 			dateTime, err := parseDateTime(event.DateTime)
 			if err != nil {
 				act.warnLog.Printf("time event error -> %s", err)
@@ -85,6 +90,8 @@ func (act *ListenActor) runListen(quit chan int) {
 			}
 			act.timeBefore = dateTime
 
+			act.cameralog.Printf("%d: listen event: %+v\n", time.Now().UnixNano()/1000_000, event)
+			act.cameralog.Printf("%d: listen event: %+v\n", time.Now().UnixNano()/1000_000, event.PeopleCounting)
 			if first {
 				act.infoLog.Printf("initial event -> %+v", event.PeopleCounting)
 				act.infoLog.Printf("initial event -> %+v", event)

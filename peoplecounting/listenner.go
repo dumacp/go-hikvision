@@ -1,7 +1,9 @@
 package peoplecounting
 
 import (
+	"bytes"
 	"context"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
@@ -9,7 +11,7 @@ import (
 )
 
 //Listen function to listen events
-func Listen(quit chan int, socket string, wError *log.Logger) <-chan interface{} {
+func Listen(quit chan int, socket string, wError, wCamera *log.Logger) <-chan interface{} {
 	// wError.Println("listennnnn")
 
 	ch := make(chan interface{})
@@ -38,12 +40,23 @@ func Listen(quit chan int, socket string, wError *log.Logger) <-chan interface{}
 				// log.Printf("Post from website! r.PostFrom = %v\n", req.PostForm)
 				reader := req.Body
 
+				body, err := ioutil.ReadAll(reader)
+				if err != nil {
+					log.Printf("Error reading body: %v", err)
+					return
+				}
+				reader.Close()
+
+				wCamera.Printf("%d: listen event: %s\n", time.Now().UnixNano()/1000_000, body)
+
+				newreader := bytes.NewReader(body)
+
 				// if err != nil {
 				// 	return
 				// }
-				event, err := parseXMLEvent(reader)
+				event, err := parseXMLEvent(newreader)
 				// req.Body.Close()
-				reader.Close()
+				// reader.Close()
 				if err != nil {
 					log.Println(err)
 					return

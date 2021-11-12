@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.16"
+	showVersion = "1.0.19"
 )
 
 var debug bool
@@ -24,6 +24,7 @@ var logStd bool
 var socket string
 var pathdb string
 var version bool
+var logXML bool
 
 var isZeroOpenState bool
 
@@ -33,6 +34,7 @@ func init() {
 	flag.StringVar(&socket, "socket", ":8088", "socket to listen events")
 	flag.StringVar(&pathdb, "pathdb", "/SD/boltdbs/countingdb", "socket to listen events")
 	flag.BoolVar(&version, "version", false, "show version")
+	flag.BoolVar(&logXML, "logxml", false, "logging XML in file")
 	flag.BoolVar(&isZeroOpenState, "zeroOpenState", false, "Is Zero the open state?")
 }
 
@@ -44,7 +46,7 @@ func main() {
 		fmt.Printf("version: %s\n", showVersion)
 		os.Exit(2)
 	}
-	initLogs(debug, logStd)
+	initLogs(debug, logStd, logXML)
 
 	// peoplecounting.Listen(socket, errlog)
 
@@ -53,11 +55,12 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	rootContext := actor.EmptyRootContext
+	rootContext := actor.NewActorSystem().Root
 
 	counting := client.NewCountingActor()
 	counting.SetZeroOpenState(isZeroOpenState)
-	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
+	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).
+		SetLogBuild(buildlog)
 	if debug {
 		counting.WithDebug()
 	}
@@ -69,7 +72,8 @@ func main() {
 	}
 
 	listenner := client.NewListen(socket, pidCounting)
-	listenner.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
+	listenner.SetLogError(errlog).SetLogWarn(warnlog).
+		SetLogInfo(infolog).SetLogBuild(buildlog).SetLogCamera(cameralog)
 	if debug {
 		listenner.WithDebug()
 	}

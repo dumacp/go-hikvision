@@ -8,11 +8,13 @@ import (
 
 //Logger struct to logger
 type Logger struct {
-	errLog   *log.Logger
-	warnLog  *log.Logger
-	infoLog  *log.Logger
-	buildLog *log.Logger
-	debug    bool
+	errLog    *log.Logger
+	warnLog   *log.Logger
+	infoLog   *log.Logger
+	buildLog  *log.Logger
+	cameralog *log.Logger
+
+	debug bool
 }
 
 //SetLogError set logs with ERROR level
@@ -39,6 +41,12 @@ func (act *Logger) SetLogBuild(info *log.Logger) *Logger {
 	return act
 }
 
+//SetLogCamera set logs with INFO level
+func (act *Logger) SetLogCamera(info *log.Logger) *Logger {
+	act.cameralog = info
+	return act
+}
+
 //WithDebug apply debug
 func (act *Logger) WithDebug() *Logger {
 	act.debug = true
@@ -57,6 +65,9 @@ func (act *Logger) initLogs() {
 	}
 	if act.buildLog == nil {
 		act.buildLog = log.New(os.Stderr, "[ BUILD ] ", 7)
+	}
+	if act.cameralog == nil {
+		act.cameralog = log.New(os.Stderr, "[ INFO ] ", 6)
 	}
 	if !act.debug {
 		act.buildLog.SetOutput(ioutil.Discard)
