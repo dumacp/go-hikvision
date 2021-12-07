@@ -55,7 +55,7 @@ func (act *ListenActor) Receive(ctx actor.Context) {
 type msgListenError struct{}
 
 func (act *ListenActor) runListen(quit chan int) {
-	events := peoplecounting.Listen(quit, act.socket, act.errLog)
+	events := peoplecounting.Listen(quit, act.socket, act.errLog, act.)
 	for v := range events {
 		act.buildLog.Printf("listen event: %#v\n", v)
 		switch event := v.(type) {

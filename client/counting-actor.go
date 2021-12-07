@@ -10,8 +10,9 @@ import (
 type CountingActor struct {
 	persistence.Mixin
 	*Logger
-	flagRecovering bool
+	// flagRecovering bool
 	openState      uint
+	countCloseDoor bool
 	puertas        map[uint]uint
 	inputs         int64
 	outputs        int64
@@ -40,6 +41,15 @@ func (a *CountingActor) SetZeroOpenState(state bool) {
 		a.openState = 0
 	} else {
 		a.openState = 1
+	}
+}
+
+//SetZeroOpenState set the open state in gpio door
+func (a *CountingActor) SetCountCloseDoor(state bool) {
+	if state {
+		a.countCloseDoor = true
+	} else {
+		a.countCloseDoor = false
 	}
 }
 
@@ -180,7 +190,9 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		case messages.INPUT:
 			diff := msg.GetValue() - a.rawInputs
 			if diff > 0 && diff < 10 {
-				if v, ok := a.puertas[gpioPuerta2]; !ok || v != a.openState {
+
+				v, ok := a.puertas[gpioPuerta2]
+				if !a.countCloseDoor && (!ok || v != a.openState) {
 					a.warnLog.Printf("counting inputs when door is closed, count: %v", diff)
 				} else {
 					a.inputs += diff
@@ -208,7 +220,9 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			diff := msg.GetValue() - a.rawOutputs
 			if diff > 0 && diff < 10 {
 				//TODO: back door allways!
-				if v, ok := a.puertas[gpioPuerta2]; !ok || v != a.openState {
+
+				v, ok := a.puertas[gpioPuerta2]
+				if !a.countCloseDoor && (!ok || v != a.openState) {
 					a.warnLog.Printf("counting outputs when door is closed, count: %v", diff)
 				} else {
 					a.outputs += diff

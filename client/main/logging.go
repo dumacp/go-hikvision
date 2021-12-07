@@ -19,12 +19,14 @@ var (
 
 func newLogFile(dir, prefixFile string) (*log.Logger, error) {
 
-	logg, err := logs.NewRotate(dir, prefixFile, 1024*1024*2, 20, 0)
+	logg, err := logs.NewRotate(dir, prefixFile, 1024*1024*2, 20)
 	if err != nil {
 		return nil, err
 	}
 
-	return logg, nil
+	logger := logg.NewLogger("", log.LstdFlags)
+
+	return logger, nil
 }
 
 func newLog(logStd bool, prefix string, flags int, priority int) *log.Logger {

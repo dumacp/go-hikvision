@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.19"
+	showVersion = "1.0.20"
 )
 
 var debug bool
@@ -27,6 +27,7 @@ var version bool
 var logXML bool
 
 var isZeroOpenState bool
+var enableCountWithCloseDoor bool
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
@@ -36,6 +37,7 @@ func init() {
 	flag.BoolVar(&version, "version", false, "show version")
 	flag.BoolVar(&logXML, "logxml", false, "logging XML in file")
 	flag.BoolVar(&isZeroOpenState, "zeroOpenState", false, "Is Zero the open state?")
+	flag.BoolVar(&enableCountWithCloseDoor, "countWithCloseDoor", false, "enable count with close door?")
 }
 
 func main() {
@@ -59,6 +61,7 @@ func main() {
 
 	counting := client.NewCountingActor()
 	counting.SetZeroOpenState(isZeroOpenState)
+	counting.SetCountCloseDoor(enableCountWithCloseDoor)
 	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).
 		SetLogBuild(buildlog)
 	if debug {
@@ -74,6 +77,7 @@ func main() {
 	listenner := client.NewListen(socket, pidCounting)
 	listenner.SetLogError(errlog).SetLogWarn(warnlog).
 		SetLogInfo(infolog).SetLogBuild(buildlog).SetLogCamera(cameralog)
+
 	if debug {
 		listenner.WithDebug()
 	}
