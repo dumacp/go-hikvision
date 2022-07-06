@@ -192,14 +192,23 @@ func buildEventTampering(ctx actor.Context, v *messages.Event, mem1, mem2 *memor
 		Type:      "TAMPERING",
 	}
 
+	id := 1
 	val := struct {
-		Coord string `json:"coord"`
-		ID    int    `json:"id"`
-		State uint   `json:"state"`
+		Coord    string  `json:"coord"`
+		ID       int     `json:"id"`
+		State    uint    `json:"state"`
+		Counters []int64 `json:"counters"`
 	}{
 		frame,
-		1,
+		id,
 		doorState,
+		[]int64{0, 0},
+	}
+
+	if id == 0 {
+		val.Counters[0] = 1
+	} else if id == 1 {
+		val.Counters[1] = 1
 	}
 	message.Value = val
 

@@ -46,12 +46,12 @@ func (act *PingActor) keepAlive(quit chan int) {
 			select {
 			case <-t1.C:
 				resp, err := http.Get(fmt.Sprintf("http://%s", pingIP))
-				resp.Body.Close()
 				if err != nil {
 					act.ctx.Send(act.ctx.Parent(), &msgPingError{})
 					t1.Reset(300 * time.Second)
 					break
 				}
+				resp.Body.Close()
 
 				t1.Reset(60 * time.Second)
 			case <-act.quit:
