@@ -1,12 +1,16 @@
 package client
 
 import (
+	"encoding/json"
+	"time"
+
 	"github.com/AsynkronIT/protoactor-go/actor"
 	"github.com/AsynkronIT/protoactor-go/persistence"
 	"github.com/dumacp/go-hikvision/client/messages"
+	"github.com/dumacp/pubsub"
 )
 
-//CountingActor struct
+// CountingActor struct
 type CountingActor struct {
 	persistence.Mixin
 	*Logger
@@ -21,13 +25,18 @@ type CountingActor struct {
 	allInputs      int64
 	allOutputs     int64
 
-	pubsub *actor.PID
+	// pubsub *actor.PID
 	doors  *actor.PID
 	events *actor.PID
 	ping   *actor.PID
+	gps    *actor.PID
 }
 
-//NewCountingActor create CountingActor
+const (
+	backdoorID = 1
+)
+
+// NewCountingActor create CountingActor
 func NewCountingActor() *CountingActor {
 	count := &CountingActor{}
 	count.Logger = &Logger{}
@@ -35,7 +44,7 @@ func NewCountingActor() *CountingActor {
 	return count
 }
 
-//SetZeroOpenState set the open state in gpio door
+// SetZeroOpenState set the open state in gpio door
 func (a *CountingActor) SetZeroOpenState(state bool) {
 	if state {
 		a.openState = 0
@@ -44,7 +53,7 @@ func (a *CountingActor) SetZeroOpenState(state bool) {
 	}
 }
 
-//SetZeroOpenState set the open state in gpio door
+// SetZeroOpenState set the open state in gpio door
 func (a *CountingActor) SetCountCloseDoor(state bool) {
 	if state {
 		a.countCloseDoor = true
@@ -53,41 +62,20 @@ func (a *CountingActor) SetCountCloseDoor(state bool) {
 	}
 }
 
-// type Snapshot struct {
-// 	Inputs  uint32
-// 	Outputs uint32
-// }
-
-// func (snap *Snapshot) Reset() { *snap = Snapshot{} }
-// func (snap *Snapshot) String() string {
-// 	return fmt.Sprintf("{Inputs: %d, Outputs: %d}", snap.Inputs, snap.Outputs)
-// }
-// func (snap *Snapshot) ProtoMessage() {}
-
-//MsgSendRegisters messages to send registers to pubsub
+type register struct {
+	Registers []int64 `json:"registers"`
+}
 type MsgSendRegisters struct{}
 
-//Receive function to receive message in actor
+// Receive function to receive message in actor
 func (a *CountingActor) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		a.initLogs()
 		a.infoLog.Printf("actor started \"%s\"", ctx.Self().Id)
 
-		pubsub := NewPubSubActor()
-		pubsub.SetLogError(a.errLog).
-			SetLogWarn(a.warnLog).
-			SetLogInfo(a.infoLog).
-			SetLogBuild(a.buildLog)
-		if a.debug {
-			pubsub.WithDebug()
-		}
-		props1 := actor.PropsFromFunc(pubsub.Receive)
-		pid1, err := ctx.SpawnNamed(props1, "pubsub")
-		if err != nil {
-			a.errLog.Panicln(err)
-		}
-		a.pubsub = pid1
+		InitPubSub(ctx.ActorSystem().Root)
+		time.Sleep(3 * time.Second)
 
 		events := NewEventActor()
 		events.openState = a.openState
@@ -105,7 +93,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 		a.events = pid2
 
-		props3 := actor.PropsFromProducer(func() actor.Actor { return &DoorsActor{} })
+		props3 := actor.PropsFromProducer(func() actor.Actor { return NewDoorsActor() })
 		pid3, err := ctx.SpawnNamed(props3, "doors")
 		if err != nil {
 			a.errLog.Panicln(err)
@@ -119,6 +107,13 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 		a.ping = pid4
 
+		props5 := actor.PropsFromProducer(func() actor.Actor { return NewGPSActor() })
+		pid5, err := ctx.SpawnNamed(props5, "gps")
+		if err != nil {
+			a.errLog.Panicln(err)
+		}
+		a.gps = pid5
+
 	case *persistence.RequestSnapshot:
 		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
 			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
@@ -131,20 +126,21 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			AllOutputs: a.allOutputs,
 		}
 		a.PersistSnapshot(snap)
-		ctx.Send(a.pubsub, snap)
+		ctx.Send(ctx.Self(), &MsgSendRegisters{})
 
 	case *MsgSendRegisters:
 		if a.outputs <= 0 && a.inputs <= 0 {
 			break
 		}
-		snap := &messages.Snapshot{
-			Inputs:     a.inputs,
-			Outputs:    a.outputs,
-			RawInputs:  a.rawInputs,
-			RawOutputs: a.rawOutputs,
+		reg := &register{}
+		reg.Registers = []int64{a.outputs, a.inputs}
+		data, err := json.Marshal(reg)
+		if err != nil {
+			a.errLog.Println(err)
+			break
 		}
-		ctx.Send(a.pubsub, snap)
-
+		a.buildLog.Printf("data: %q", data)
+		Publish(topicCounter, data)
 	case *messages.Snapshot:
 		a.inputs = msg.GetInputs()
 		a.outputs = msg.GetOutputs()
@@ -161,16 +157,20 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 		a.infoLog.Printf("recovered from snapshot, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
 			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
-		// ctx.Send(a.pubsub, msg)
+		reg := &register{}
+		reg.Registers = []int64{msg.Inputs, msg.Outputs}
+		data, err := json.Marshal(reg)
+		if err != nil {
+			a.errLog.Println(err)
+			break
+		}
+		a.buildLog.Printf("data: %q", data)
+		Publish(topicCounter, data)
 	case *persistence.ReplayComplete:
 		a.infoLog.Printf("replay completed, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
 			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
-		snap := &messages.Snapshot{
-			Inputs:  a.inputs,
-			Outputs: a.outputs,
-		}
 		// a.PersistSnapshot(snap)
-		ctx.Send(a.pubsub, snap)
+		ctx.Send(ctx.Self(), &MsgSendRegisters{})
 	case *messages.Event:
 		if a.Recovering() {
 			// a.flagRecovering = true
@@ -183,15 +183,12 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
 				scenario, a.inputs, a.outputs)
 		}
-		// a.buildLog.Printf("event -> %#v", msg)
-		// a.buildLog.Printf("data ->'%v', rawinputs -> '%v', rawoutputs -> '%v' \n",
-		// 	msg.GetValue(), a.rawInputs, a.rawOutputs)
 		switch msg.GetType() {
 		case messages.INPUT:
 			diff := msg.GetValue() - a.rawInputs
 			if diff > 0 && diff < 10 {
 
-				v, ok := a.puertas[gpioPuerta2]
+				v, ok := a.puertas[backdoorID]
 				if !a.countCloseDoor && (!ok || v != a.openState) {
 					a.warnLog.Printf("counting inputs when door is closed, count: %v", diff)
 				} else {
@@ -210,10 +207,6 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 						a.allInputs += msg.GetValue()
 					}
 				}
-				//a.inputs += msg.GetValue()
-				//if !a.Recovering() {
-				//	ctx.Send(a.events, msg)
-				//}
 			}
 			a.rawInputs = msg.GetValue()
 		case messages.OUTPUT:
@@ -221,7 +214,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			if diff > 0 && diff < 10 {
 				//TODO: back door allways!
 
-				v, ok := a.puertas[gpioPuerta2]
+				v, ok := a.puertas[backdoorID]
 				if !a.countCloseDoor && (!ok || v != a.openState) {
 					a.warnLog.Printf("counting outputs when door is closed, count: %v", diff)
 				} else {
@@ -240,39 +233,34 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 						a.allOutputs += msg.GetValue()
 					}
 				}
-				//a.outputs += msg.GetValue()
-				//if !a.Recovering() {
-				//	ctx.Send(a.events, msg)
-				//}
 			}
 			a.rawOutputs = msg.GetValue()
 		case messages.TAMPERING:
-			a.warnLog.Println("shelteralarm")
+			a.warnLog.Println("tampering")
 			ctx.Send(a.events, msg)
 		}
 
-		// if a.flagRecovering {
-		// 	a.flagRecovering = false
-		// 	snap := &messages.Snapshot{
-		// 		Inputs:     a.inputs,
-		// 		Outputs:    a.outputs,
-		// 		RawInputs:  a.rawInputs,
-		// 		RawOutputs: a.rawOutputs,
-		// 	}
-		// 	a.PersistSnapshot(snap)
-		// }
-
 	case *msgPingError:
 		a.warnLog.Printf("camera keep alive error")
-		ctx.Send(a.pubsub, msg)
-	case *msgDoor:
+		message := &pubsub.Message{
+			Timestamp: float64(time.Now().UnixNano()) / 1000000000,
+			Type:      "CounterDisconnected",
+			Value:     1,
+		}
+		data, err := json.Marshal(message)
+		if err != nil {
+			break
+		}
+		a.buildLog.Printf("data: %q", data)
+		Publish(topicEvents, data)
+	case *MsgDoor:
 		ctx.Send(a.events, msg)
-		a.puertas[msg.id] = msg.value
-	case *msgGPS:
-		// a.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
-		ctx.Send(a.events, msg)
+		a.puertas[msg.ID] = msg.Value
+	case *MsgGetGps:
+		ctx.RequestWithCustomSender(a.gps, msg, ctx.Sender())
 	case *msgEvent:
-		ctx.Send(a.pubsub, msg)
+		a.buildLog.Printf("data: %q", msg)
+		Publish(topicEvents, msg.data)
 	case *actor.Terminated:
 		a.warnLog.Printf("actor terminated: %s", msg.GetWho().GetAddress())
 	}

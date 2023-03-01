@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.22"
+	showVersion = "1.0.23_test"
 )
 
 var debug bool
@@ -97,12 +97,6 @@ func main() {
 	time.Sleep(3 * time.Second)
 
 	rootContext.Send(pidCounting, &client.MsgSendRegisters{})
-
-	// rootContext.PoisonFuture(pidListen).Wait()
-	// pidListen, err = rootContext.SpawnNamed(propsListen, "listenner")
-	// if err != nil {
-	// 	errlog.Println(err)
-	// }
 
 	infolog.Printf("back camera counter START --  version: %s\n", showVersion)
 

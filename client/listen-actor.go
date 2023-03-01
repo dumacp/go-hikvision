@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/dumacp/go-hikvision/peoplecounting"
 )
 
-//ListenActor actor to listen events
+// ListenActor actor to listen events
 type ListenActor struct {
 	*Logger
 	context       actor.Context
@@ -19,34 +20,34 @@ type ListenActor struct {
 	exitsBefore   int64
 	timeBefore    *time.Time
 
-	quit chan int
+	cancel func()
 
 	socket string
 }
 
-//NewListen create listen actor
+// NewListen create listen actor
 func NewListen(socket string, countingActor *actor.PID) *ListenActor {
 	act := &ListenActor{}
 	act.countingActor = countingActor
 	act.socket = socket
 	act.Logger = &Logger{}
-	act.quit = make(chan int, 0)
 	return act
 }
 
-//Receive func Receive in actor
+// Receive func Receive in actor
 func (act *ListenActor) Receive(ctx actor.Context) {
 	act.context = ctx
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		act.initLogs()
 		act.infoLog.Printf("actor started \"%s\"", ctx.Self().Id)
-		go act.runListen(act.quit)
+		contxt, cancel := context.WithCancel(context.TODO())
+		act.cancel = cancel
+		go act.runListen(contxt)
 	case *actor.Stopping:
 		act.warnLog.Println("stopped actor")
-		select {
-		case act.quit <- 1:
-		case <-time.After(3 * time.Second):
+		if act.cancel != nil {
+			act.cancel()
 		}
 	case *messages.CountingActor:
 		act.countingActor = actor.NewPID(msg.Address, msg.ID)
@@ -68,9 +69,9 @@ func parseDateTime(t1 string) (*time.Time, error) {
 	return &p1, nil
 }
 
-func (act *ListenActor) runListen(quit chan int) {
+func (act *ListenActor) runListen(ctx context.Context) {
 	first := true
-	events := peoplecounting.Listen(quit, act.socket, act.errLog, act.cameralog)
+	events := peoplecounting.Listen(ctx, act.socket, act.errLog, act.cameralog)
 	for v := range events {
 		act.buildLog.Printf("listen event: %#v\n", v)
 		switch event := v.(type) {

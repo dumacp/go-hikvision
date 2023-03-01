@@ -1,6 +1,8 @@
 package client
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,7 +15,7 @@ import (
 )
 
 const (
-	clietnName  = "go-camera-actor"
+	clietnName  = "camera"
 	topicEvents = "EVENTS/backcounter"
 	// topicScene   = "EVENTS/scene"
 	topicCounter = "COUNTERBACKDOOR"
@@ -23,15 +25,14 @@ type msgGPS struct {
 	data []byte
 }
 
-//ActorPubsub actor to send mesages to MQTTT broket
+// ActorPubsub actor to send mesages to MQTTT broket
 type ActorPubsub struct {
 	*Logger
 	ctx        actor.Context
 	clientMqtt MQTT.Client
-	debug      bool
 }
 
-//NewPubSubActor create PubSubActor
+// NewPubSubActor create PubSubActor
 func NewPubSubActor() *ActorPubsub {
 	act := &ActorPubsub{}
 	act.Logger = &Logger{}
@@ -42,7 +43,7 @@ type register struct {
 	Registers []int64 `json:"registers"`
 }
 
-//Receive func Receive to actor
+// Receive func Receive to actor
 func (act *ActorPubsub) Receive(ctx actor.Context) {
 	act.ctx = ctx
 	switch msg := ctx.Message().(type) {
@@ -111,7 +112,9 @@ func onMessageWithChannel(ctx actor.Context) func(c MQTT.Client, msg MQTT.Messag
 
 func connectMqtt(ctx actor.Context) (MQTT.Client, error) {
 	opts := MQTT.NewClientOptions().AddBroker("tcp://127.0.0.1:1883")
-	opts.SetClientID(clietnName)
+	randBytes := make([]byte, 4)
+	rand.Read(randBytes)
+	opts.SetClientID(fmt.Sprintf("%s-%s-%d", clietnName, hex.EncodeToString(randBytes), time.Now().Unix()))
 	opts.SetAutoReconnect(false)
 	// opts.SetDefaultPublishHandler(onMessageWithChannel(act.ctx))
 	conn := MQTT.NewClient(opts)

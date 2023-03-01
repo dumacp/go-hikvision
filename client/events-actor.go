@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"encoding/json"
 	"time"
 
@@ -15,26 +14,22 @@ const (
 	gngnsType = 1
 )
 
-//EventActor type
+// EventActor type
 type EventActor struct {
 	*Logger
-	mem1      *memoryGPS
-	mem2      *memoryGPS
 	puertas   map[uint]uint
 	openState uint
 }
 
-//NewEventActor create EventActor
+// NewEventActor create EventActor
 func NewEventActor() *EventActor {
 	event := &EventActor{}
 	event.Logger = &Logger{}
-	event.mem1 = &memoryGPS{}
-	event.mem2 = &memoryGPS{}
 	event.puertas = make(map[uint]uint)
 	return event
 }
 
-//SetOpenState set open state
+// SetOpenState set open state
 func (act *EventActor) SetOpenState(state uint) {
 	act.openState = state
 }
@@ -43,7 +38,7 @@ type msgEvent struct {
 	data []byte
 }
 
-//Receive function to Receive actor messages
+// Receive function to Receive actor messages
 func (act *EventActor) Receive(ctx actor.Context) {
 
 	switch msg := ctx.Message().(type) {
@@ -52,87 +47,47 @@ func (act *EventActor) Receive(ctx actor.Context) {
 		act.infoLog.Printf("actor started \"%s\"", ctx.Self().Id)
 	case *messages.Event:
 		act.buildLog.Printf("\"%s\" - event -> '%v'\n", ctx.Self().GetId(), msg)
+		frame := ""
+		res, err := ctx.RequestFuture(ctx.Parent(), &MsgGetGps{}, 180*time.Millisecond).Result()
+		if err == nil {
+			if datagps, ok := res.(*MsgGPS); ok {
+				frame = string(datagps.Data)
+			}
+		}
 		var event []byte
 		switch msg.Type {
 		case messages.INPUT:
-			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+
+			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger)
 		case messages.OUTPUT:
-			event = buildEventPass(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger)
 		case messages.TAMPERING:
-			event = buildEventTampering(ctx, msg, act.mem1, act.mem2, act.puertas, act.Logger)
+			event = buildEventTampering(ctx, msg, frame, act.puertas, act.Logger)
 		}
 		ctx.Send(ctx.Parent(), &msgEvent{data: event})
-	case *msgGPS:
-		// act.buildLog.Printf("\"%s\" - msg: '%q'\n", ctx.Self().GetId(), msg)
-		mem := captureGPS(msg.data)
-		// act.buildLog.Printf("mem, %v", mem)
-		switch mem.typeM {
-		case gprmctype:
-			act.mem1 = &mem
-		case gngnsType:
-			act.mem2 = &mem
-		}
-		// act.buildLog.Printf("memorys 1, %v, %v", act.mem1, act.mem2)
-	case *msgDoor:
-		act.puertas[msg.id] = msg.value
-		act.buildLog.Printf("%v\n", msg)
+
+	case *MsgDoor:
+		act.puertas[msg.ID] = msg.Value
+		act.buildLog.Printf("arrived door to events-actor: %v\n", msg)
 	case *actor.Stopped:
 		act.infoLog.Println("stoped actor")
 	}
 }
 
-type memoryGPS struct {
-	typeM     int
-	frame     string
-	timestamp int64
-}
+func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map[uint]uint, log *Logger) []byte {
+	// tn := time.Now()
 
-func captureGPS(gps []byte) memoryGPS {
-	// memoryGPRMC := new(memoryGPS)
-	// memoryGNSNS := new(memoryGPS)
-	// ch1 := make(chan memoryGPS, 2)
-	// ch2 := make(chan memoryGPS, 1)
-	// go func() {
-	// for v := range chGPS {
-	memory := memoryGPS{}
-	if bytes.Contains(gps, []byte("GPRMC")) {
-
-		memory.typeM = gprmctype
-		memory.frame = string(gps)
-		memory.timestamp = time.Now().Unix()
-
-	} else if bytes.Contains(gps, []byte("GNGNS")) {
-		memory.typeM = gngnsType
-		memory.frame = string(gps)
-		memory.timestamp = time.Now().Unix()
-	}
-	return memory
-}
-
-func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
-	tn := time.Now()
-
-	log.buildLog.Printf("memorys, %v, %v", mem1, mem2)
+	// log.buildLog.Printf("memorys, %v, %v", mem1, mem2)
 	contadores := []int64{0, 0}
 	if v.Type == messages.INPUT {
 		contadores[0] = v.Value
 	} else if v.Type == messages.OUTPUT {
 		contadores[1] = v.Value
 	}
-	frame := ""
-
-	// if mem1.timestamp > mem2.timestamp {
-	if mem1.timestamp+30 > tn.Unix() {
-		frame = mem1.frame
-		// }
-	} else if mem2.timestamp+30 > tn.Unix() {
-		frame = mem2.frame
-		// }
-	}
-	log.buildLog.Printf("frame, %v", frame)
+	frame := gps
 
 	doorState := uint(0)
-	if vm, ok := puerta[gpioPuerta2]; ok {
+	if vm, ok := puerta[backdoorID]; ok {
 
 		doorState = vm
 	}
@@ -164,26 +119,16 @@ func buildEventPass(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS,
 	return msg
 }
 
-func buildEventTampering(ctx actor.Context, v *messages.Event, mem1, mem2 *memoryGPS, puerta map[uint]uint, log *Logger) []byte {
-	tn := time.Now()
+func buildEventTampering(ctx actor.Context, v *messages.Event, gps string, puerta map[uint]uint, log *Logger) []byte {
+	// tn := time.Now()
 
 	if v.Type != messages.TAMPERING {
 		return nil
 	}
-	frame := ""
-
-	if mem1.timestamp > mem2.timestamp {
-		if mem1.timestamp+30 > tn.Unix() {
-			frame = mem1.frame
-		}
-	} else {
-		if mem2.timestamp+30 > tn.Unix() {
-			frame = mem2.frame
-		}
-	}
+	frame := gps
 
 	doorState := uint(0)
-	if vm, ok := puerta[gpioPuerta2]; ok {
+	if vm, ok := puerta[backdoorID]; ok {
 		doorState = vm
 	}
 

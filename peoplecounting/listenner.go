@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-//Listen function to listen events
-func Listen(quit chan int, socket string, wError, wCamera *log.Logger) <-chan interface{} {
+// Listen function to listen events
+func Listen(ctx context.Context, socket string, wError, wCamera *log.Logger) <-chan interface{} {
 	// wError.Println("listennnnn")
 
 	ch := make(chan interface{})
@@ -65,6 +65,7 @@ func Listen(quit chan int, socket string, wError, wCamera *log.Logger) <-chan in
 				case ch <- event:
 				//Timeout
 				case <-time.After(3 * time.Second):
+				case <-ctx.Done():
 				}
 			}
 		}
@@ -87,24 +88,14 @@ func Listen(quit chan int, socket string, wError, wCamera *log.Logger) <-chan in
 	go func() {
 		// defer close(ch)
 		err := srv.ListenAndServe()
+		close(ch)
 		wError.Println(err)
 	}()
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	go func(cancel context.CancelFunc) {
-		select {
-		case <-quit:
-			// wError.Println("shutdown server http")
-			cancel()
-		}
-	}(cancel)
 	go func(ctx context.Context) {
-		select {
-		case <-ctx.Done():
-			srv.Shutdown(ctx)
-			wError.Println("shutdown server http")
-		}
+		<-ctx.Done()
+		srv.Shutdown(ctx)
+		wError.Println("shutdown server http")
 	}(ctx)
 
 	return ch
