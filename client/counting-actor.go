@@ -133,7 +133,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			break
 		}
 		reg := &register{}
-		reg.Registers = []int64{a.outputs, a.inputs}
+		reg.Registers = []int64{a.inputs, a.outputs}
 		data, err := json.Marshal(reg)
 		if err != nil {
 			a.errLog.Println(err)
