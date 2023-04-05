@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/AsynkronIT/protoactor-go/actor"
-	"github.com/dumacp/go-doors/doorsmsg"
+	"github.com/dumacp/go-doors/api"
 	"github.com/dumacp/go-logs/pkg/logs"
 	psub "github.com/dumacp/pubsub"
 )
@@ -21,7 +21,7 @@ func NewDoorsActor() actor.Actor {
 	return a
 }
 
-func parseDoorsEvents(msg []byte) (interface{}, error) {
+func parsePubSubDoorsEvents(msg []byte) (interface{}, error) {
 
 	type ValueDoor struct {
 		Coord string `json:"coord"`
@@ -51,6 +51,22 @@ func parseDoorsEvents(msg []byte) (interface{}, error) {
 	return result, nil
 }
 
+func parseDoorsEvents(msg []byte) (interface{}, error) {
+
+	event := new(api.DoorState)
+
+	if err := json.Unmarshal(msg, event); err != nil {
+		return nil, err
+	}
+
+	result := new(MsgDoor)
+
+	result.ID = uint(event.Id)
+	result.Value = uint(event.Value)
+
+	return result, nil
+}
+
 // Receive func Receive in actor
 func (a *DoorsActor) Receive(ctx actor.Context) {
 	logs.LogBuild.Printf("Message arrived in doorsActor: %T, %s",
@@ -60,7 +76,7 @@ func (a *DoorsActor) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		logs.LogInfo.Printf("started \"%s\", %v", ctx.Self().GetId(), ctx.Self())
-		if err := SubscribeFun("EVENTS/doors", ctx.Self(), parseDoorsEvents); err != nil {
+		if err := SubscribeFun("EVENTS/doors", ctx.Self(), parsePubSubDoorsEvents); err != nil {
 			time.Sleep(3 * time.Second)
 			logs.LogError.Panic(err)
 		}
@@ -68,8 +84,8 @@ func (a *DoorsActor) Receive(ctx actor.Context) {
 			time.Sleep(3 * time.Second)
 			logs.LogError.Panic(err)
 		}
-		req := doorsmsg.DoorsStateRequest{
-			TopicResponse: "camera/doors",
+		req := &api.DoorsStateRequest{
+			Topic: "camera/doors",
 		}
 		data, err := json.Marshal(req)
 		if err != nil {

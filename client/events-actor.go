@@ -86,9 +86,9 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 	}
 	frame := gps
 
+	id := v.ID
 	doorState := uint(0)
-	if vm, ok := puerta[backdoorID]; ok {
-
+	if vm, ok := puerta[uint(id)]; ok {
 		doorState = vm
 	}
 
@@ -127,8 +127,9 @@ func buildEventTampering(ctx actor.Context, v *messages.Event, gps string, puert
 	}
 	frame := gps
 
+	id := v.ID
 	doorState := uint(0)
-	if vm, ok := puerta[backdoorID]; ok {
+	if vm, ok := puerta[uint(id)]; ok {
 		doorState = vm
 	}
 
@@ -137,7 +138,6 @@ func buildEventTampering(ctx actor.Context, v *messages.Event, gps string, puert
 		Type:      "TAMPERING",
 	}
 
-	id := int(v.ID)
 	val := struct {
 		Coord    string  `json:"coord"`
 		ID       int     `json:"id"`
@@ -145,7 +145,7 @@ func buildEventTampering(ctx actor.Context, v *messages.Event, gps string, puert
 		Counters []int64 `json:"counters"`
 	}{
 		frame,
-		id,
+		int(id),
 		doorState,
 		[]int64{0, 0},
 	}
