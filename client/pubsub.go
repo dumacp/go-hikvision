@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	clientID              = "camera"
-	TopicAppliance        = "appliance/camera"
-	topicEvents           = "EVENTS/backcounter"
-	topicCounter          = "COUNTERBACKDOOR"
+	clientID       = "camera"
+	TopicAppliance = "appliance/camera"
+	topicEvents    = "EVENTS/backcounter"
+	//topicCounter          = "COUNTERBACKDOOR"
+	topicCounter          = "COUNTERSMAPDOOR"
 	TopicStart            = TopicAppliance + "/START"
 	TopicRestart          = TopicAppliance + "/RESTART"
 	TopicStop             = TopicAppliance + "/STOP"

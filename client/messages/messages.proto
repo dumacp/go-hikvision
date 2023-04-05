@@ -1,6 +1,6 @@
 syntax = "proto3";
 package messages;
-import "github.com/AsynkronIT/protoactor-go/actor/protos.proto";
+// import "github.com/AsynkronIT/protoactor-go/actor/protos.proto";
 
 
 
@@ -21,6 +21,7 @@ message Event {
 	}
 	EventType type = 1;
 	int64 value = 2;
+	int32 ID = 3;
 }
 
 message Snapshot {
@@ -30,6 +31,13 @@ message Snapshot {
 	int64 RawOutputs = 4; 
 	int64 AllInputs = 5;
 	int64 AllOutputs = 6; 
+	map<int32, int64> inputsMap = 11;
+  	map<int32, int64> outputsMap = 12;
+  	map<int32, int64> rawInputsMap = 13;
+  	map<int32, int64> rawOutputsMap = 14;
+  	map<int32, int64> allInputsMap = 15;
+  	map<int32, int64> allOutputsMap = 16;
+  	map<int32, int64> tamperingMap = 17;
 }
 
 message CountingActor {

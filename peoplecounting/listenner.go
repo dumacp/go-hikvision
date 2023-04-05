@@ -3,6 +3,7 @@ package peoplecounting
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -10,11 +11,16 @@ import (
 	"time"
 )
 
+type Event struct {
+	ID   string
+	Data interface{}
+}
+
 // Listen function to listen events
-func Listen(ctx context.Context, socket string, wError, wCamera *log.Logger) <-chan interface{} {
+func Listen(ctx context.Context, socket string, wError, wCamera *log.Logger) <-chan *Event {
 	// wError.Println("listennnnn")
 
-	ch := make(chan interface{})
+	ch := make(chan *Event)
 	h1 := func(w http.ResponseWriter, req *http.Request) {
 		defer req.Body.Close()
 		switch req.Method {
@@ -61,8 +67,24 @@ func Listen(ctx context.Context, socket string, wError, wCamera *log.Logger) <-c
 					log.Println(err)
 					return
 				}
+
+				id := func() string {
+					if req != nil {
+						parts := strings.Split(req.RemoteAddr, ":")
+						if len(parts) > 0 {
+							return parts[0]
+						}
+					}
+					return ""
+				}()
+				fmt.Printf("remote: %v, id: %s\n", req, id)
+
+				evt := &Event{
+					ID:   id,
+					Data: event,
+				}
 				select {
-				case ch <- event:
+				case ch <- evt:
 				//Timeout
 				case <-time.After(3 * time.Second):
 				case <-ctx.Done():

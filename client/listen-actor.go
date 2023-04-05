@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -16,9 +17,9 @@ type ListenActor struct {
 	*Logger
 	context       actor.Context
 	countingActor *actor.PID
-	entersBefore  int64
-	exitsBefore   int64
-	timeBefore    *time.Time
+	entersBefore  map[int]int64
+	exitsBefore   map[int]int64
+	timeBefore    map[int]time.Time
 
 	cancel func()
 
@@ -31,6 +32,9 @@ func NewListen(socket string, countingActor *actor.PID) *ListenActor {
 	act.countingActor = countingActor
 	act.socket = socket
 	act.Logger = &Logger{}
+	act.timeBefore = make(map[int]time.Time)
+	act.exitsBefore = make(map[int]int64)
+	act.entersBefore = make(map[int]int64)
 	return act
 }
 
@@ -58,15 +62,15 @@ func (act *ListenActor) Receive(ctx actor.Context) {
 
 type msgListenError struct{}
 
-func parseDateTime(t1 string) (*time.Time, error) {
+func parseDateTime(t1 string) (time.Time, error) {
 	b1 := []byte(t1)
 	re := regexp.MustCompile("([0-9]{4}-[0-9]{1,2}-[0-9]{1,2}T[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2})-([0-9]:00)")
 	b2 := re.ReplaceAll(b1, []byte("${1}-0${2}"))
 	p1, err := time.Parse(time.RFC3339, string(b2))
 	if err != nil {
-		return nil, err
+		return time.Time{}, err
 	}
-	return &p1, nil
+	return p1, nil
 }
 
 func (act *ListenActor) runListen(ctx context.Context) {
@@ -74,7 +78,17 @@ func (act *ListenActor) runListen(ctx context.Context) {
 	events := peoplecounting.Listen(ctx, act.socket, act.errLog, act.cameralog)
 	for v := range events {
 		act.buildLog.Printf("listen event: %#v\n", v)
-		switch event := v.(type) {
+		id := func() int {
+			if len(v.ID) == 0 {
+				return 1
+			}
+			if strings.Contains(v.ID, "192.168.188.21") {
+				return 1
+			}
+			return 0
+		}()
+		fmt.Printf("id: %v\n", id)
+		switch event := v.Data.(type) {
 		case *peoplecounting.EventNotificationAlertPeopleConting:
 			if strings.Contains(event.PeopleCounting.StatisticalMethods, "timeRange") {
 				act.warnLog.Printf("event timeRange, events -> %+v", event.PeopleCounting)
@@ -85,11 +99,11 @@ func (act *ListenActor) runListen(ctx context.Context) {
 				act.warnLog.Printf("time event error -> %s", err)
 				break
 			}
-			if act.timeBefore != nil && dateTime.Before(*(act.timeBefore)) {
-				act.warnLog.Printf("time event error, events in the past -> new %v, before %v", dateTime, act.timeBefore)
+			if dateTime.Before((act.timeBefore[id])) {
+				act.warnLog.Printf("time event error, events in the past -> new %v, before %v", dateTime, act.timeBefore[id])
 				break
 			}
-			act.timeBefore = dateTime
+			act.timeBefore[id] = dateTime
 
 			act.cameralog.Printf("%d: listen event: %+v\n", time.Now().UnixNano()/1000_000, event)
 			act.cameralog.Printf("%d: listen event: %+v\n", time.Now().UnixNano()/1000_000, event.PeopleCounting)
@@ -99,21 +113,21 @@ func (act *ListenActor) runListen(ctx context.Context) {
 				first = false
 			}
 			enters := event.PeopleCounting.Enter
-			if diff := enters - act.entersBefore; diff > 0 {
-				act.context.Send(act.countingActor, &messages.Event{Type: messages.INPUT, Value: enters})
+			if diff := enters - act.entersBefore[id]; diff > 0 {
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.INPUT, Value: enters})
 			}
-			act.entersBefore = enters
+			act.entersBefore[id] = enters
 			exits := event.PeopleCounting.Exit
-			if diff := exits - act.exitsBefore; diff > 0 {
-				act.context.Send(act.countingActor, &messages.Event{Type: messages.OUTPUT, Value: exits})
+			if diff := exits - act.exitsBefore[id]; diff > 0 {
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.OUTPUT, Value: exits})
 			}
-			act.exitsBefore = exits
+			act.exitsBefore[id] = exits
 		case *peoplecounting.EventNotificationAlert:
 			switch event.EventType {
 			case peoplecounting.ScenechangedetectionType:
-				act.context.Send(act.countingActor, &messages.Event{Type: messages.TAMPERING, Value: 0})
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.TAMPERING, Value: 0})
 			case peoplecounting.ShelteralarmType:
-				act.context.Send(act.countingActor, &messages.Event{Type: messages.TAMPERING, Value: 0})
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.TAMPERING, Value: 0})
 			}
 		}
 	}

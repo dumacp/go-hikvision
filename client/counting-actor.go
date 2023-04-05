@@ -2,11 +2,13 @@ package client
 
 import (
 	"encoding/json"
+	"log"
 	"time"
 
 	"github.com/AsynkronIT/protoactor-go/actor"
 	"github.com/AsynkronIT/protoactor-go/persistence"
 	"github.com/dumacp/go-hikvision/client/messages"
+	"github.com/dumacp/go-logs/pkg/logs"
 	"github.com/dumacp/pubsub"
 )
 
@@ -24,6 +26,13 @@ type CountingActor struct {
 	rawOutputs     int64
 	allInputs      int64
 	allOutputs     int64
+	inputsmap      map[int32]int64
+	outputsmap     map[int32]int64
+	rawInputsmap   map[int32]int64
+	rawOutputsmap  map[int32]int64
+	allInputsmap   map[int32]int64
+	allOutputsmap  map[int32]int64
+	tamperingmap   map[int32]int64
 
 	// pubsub *actor.PID
 	doors  *actor.PID
@@ -38,7 +47,15 @@ const (
 
 // NewCountingActor create CountingActor
 func NewCountingActor() *CountingActor {
-	count := &CountingActor{}
+	count := &CountingActor{
+		inputsmap:     make(map[int32]int64),
+		outputsmap:    make(map[int32]int64),
+		rawInputsmap:  make(map[int32]int64),
+		rawOutputsmap: make(map[int32]int64),
+		allInputsmap:  make(map[int32]int64),
+		allOutputsmap: make(map[int32]int64),
+		tamperingmap:  make(map[int32]int64),
+	}
 	count.Logger = &Logger{}
 	count.puertas = make(map[uint]uint)
 	return count
@@ -116,101 +133,142 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 
 	case *persistence.RequestSnapshot:
 		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
-			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
+			a.inputsmap, a.outputsmap, a.rawInputsmap, a.rawOutputsmap, a.allInputsmap, a.allOutputsmap)
 		snap := &messages.Snapshot{
-			Inputs:     a.inputs,
-			Outputs:    a.outputs,
-			RawInputs:  a.rawInputs,
-			RawOutputs: a.rawOutputs,
-			AllInputs:  a.allInputs,
-			AllOutputs: a.allOutputs,
+			InputsMap:     a.inputsmap,
+			OutputsMap:    a.outputsmap,
+			RawInputsMap:  a.rawInputsmap,
+			RawOutputsMap: a.rawOutputsmap,
+			AllInputsMap:  a.allInputsmap,
+			AllOutputsMap: a.allOutputsmap,
 		}
 		a.PersistSnapshot(snap)
 		ctx.Send(ctx.Self(), &MsgSendRegisters{})
 
 	case *MsgSendRegisters:
-		if a.outputs <= 0 && a.inputs <= 0 {
-			break
-		}
-		reg := &register{}
-		reg.Registers = []int64{a.inputs, a.outputs}
-		data, err := json.Marshal(reg)
-		if err != nil {
-			a.errLog.Println(err)
-			break
-		}
-		a.buildLog.Printf("data: %q", data)
-		Publish(topicCounter, data)
-	case *messages.Snapshot:
-		a.inputs = msg.GetInputs()
-		a.outputs = msg.GetOutputs()
-		a.rawInputs = msg.GetRawInputs()
-		a.rawOutputs = msg.GetRawOutputs()
-		a.allInputs = msg.GetAllInputs()
-		a.allOutputs = msg.GetAllOutputs()
 
-		if a.allInputs < a.inputs {
-			a.allInputs = a.inputs
-		}
-		if a.allOutputs < a.outputs {
-			a.allOutputs = a.outputs
-		}
-		a.infoLog.Printf("recovered from snapshot, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
-			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
-		reg := &register{}
-		reg.Registers = []int64{msg.Inputs, msg.Outputs}
-		data, err := json.Marshal(reg)
-		if err != nil {
-			a.errLog.Println(err)
+		if verifySum(a.outputsmap) <= 0 && verifySum(a.inputsmap) <= 0 {
 			break
 		}
+		data, err := registersMap(a.inputsmap, a.outputsmap, make(map[int32]int64), a.tamperingmap)
+		if err != nil {
+			logs.LogWarn.Println(err)
+			break
+		}
+		log.Printf("data: %q", data)
 		a.buildLog.Printf("data: %q", data)
 		Publish(topicCounter, data)
+
+		//if a.outputsmap <= 0 && a.inputsmap <= 0 {
+		//	break
+		//}
+		//reg := &register{}
+		//reg.Registers = []int64{a.inputsmap, a.outputsmap}
+		//data, err := json.Marshal(reg)
+		//if err != nil {
+		//	a.errLog.Println(err)
+		//	break
+		//}
+		//a.buildLog.Printf("data: %q", data)
+		//Publish(topicCounter, data)
+	case *messages.Snapshot:
+		if inputsMap := msg.GetInputsMap(); inputsMap != nil {
+			a.inputsmap = inputsMap
+		}
+
+		if outputsMap := msg.GetOutputsMap(); outputsMap != nil {
+			a.outputsmap = outputsMap
+		}
+
+		if rawInputsMap := msg.GetRawInputsMap(); rawInputsMap != nil {
+			a.rawInputsmap = rawInputsMap
+		}
+
+		if rawOutputsMap := msg.GetRawOutputsMap(); rawOutputsMap != nil {
+			a.rawOutputsmap = rawOutputsMap
+		}
+
+		if allInputsMap := msg.GetAllInputsMap(); allInputsMap != nil {
+			a.allInputsmap = allInputsMap
+		}
+
+		if allOutputsMap := msg.GetAllOutputsMap(); allOutputsMap != nil {
+			a.allOutputsmap = allOutputsMap
+		}
+
+		if tamperingMap := msg.GetTamperingMap(); tamperingMap != nil {
+			a.tamperingmap = tamperingMap
+		}
+
+		//backwards compatibility
+		if a.inputs > 0 {
+			a.inputsmap[1] = a.inputs
+		}
+		if a.allOutputs > 0 {
+			a.outputsmap[1] = a.outputs
+		}
+		if a.allInputs > 0 {
+			a.allInputsmap[1] = a.allInputs
+		}
+		if a.allOutputs > 0 {
+			a.allOutputsmap[1] = a.allOutputs
+		}
+		if a.rawInputs > 0 {
+			a.rawInputsmap[1] = a.rawInputs
+		}
+		if a.rawOutputs > 0 {
+			a.rawOutputsmap[1] = a.rawOutputs
+		}
+
+		a.infoLog.Printf("recovered from snapshot, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
+			a.inputsmap, a.outputsmap, a.rawInputsmap, a.rawOutputsmap, a.allInputsmap, a.allOutputsmap)
+		ctx.Send(ctx.Self(), &MsgSendRegisters{})
 	case *persistence.ReplayComplete:
 		a.infoLog.Printf("replay completed, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
-			a.inputs, a.outputs, a.rawInputs, a.rawOutputs, a.allInputs, a.allOutputs)
+			a.inputsmap, a.outputsmap, a.rawInputsmap, a.rawOutputsmap, a.allInputsmap, a.allOutputsmap)
 		// a.PersistSnapshot(snap)
 		ctx.Send(ctx.Self(), &MsgSendRegisters{})
 	case *messages.Event:
+		id := msg.ID
 		if a.Recovering() {
 			// a.flagRecovering = true
 			scenario := "received replayed event"
 			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
-				scenario, a.inputs, a.outputs)
+				scenario, a.inputsmap, a.outputsmap)
 		} else {
 			a.PersistReceive(msg)
 			scenario := "received new message"
 			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
-				scenario, a.inputs, a.outputs)
+				scenario, a.inputsmap, a.outputsmap)
 		}
 		switch msg.GetType() {
 		case messages.INPUT:
-			diff := msg.GetValue() - a.rawInputs
+			diff := msg.GetValue() - a.rawInputsmap[id]
 			if diff > 0 && diff < 10 {
 
 				v, ok := a.puertas[backdoorID]
 				if !a.countCloseDoor && (!ok || v != a.openState) {
 					a.warnLog.Printf("counting inputs when door is closed, count: %v", diff)
 				} else {
-					a.inputs += diff
+					a.inputsmap[id] += diff
 					if !a.Recovering() {
-						ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: diff})
+						ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: diff})
 					}
 				}
-				a.allInputs += diff
+				a.allInputsmap[id] += diff
 			} else if diff < 0 {
 				if !a.Recovering() {
-					a.warnLog.Printf("warning deviation in data -> rawInputs: %d, GetValue() in event: %d", a.rawInputs, msg.GetValue())
+					a.warnLog.Printf("warning deviation in data -> rawInputs: %d, GetValue() in event: %d", a.rawInputsmap, msg.GetValue())
 					if msg.GetValue() < 4 {
-						ctx.Send(a.events, &messages.Event{Type: messages.INPUT, Value: msg.GetValue()})
-						a.inputs += msg.GetValue()
-						a.allInputs += msg.GetValue()
+						ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: msg.GetValue()})
+						a.inputsmap[id] += msg.GetValue()
+						a.allInputsmap[id] += msg.GetValue()
 					}
 				}
 			}
-			a.rawInputs = msg.GetValue()
+			a.rawInputsmap[id] = msg.GetValue()
 		case messages.OUTPUT:
-			diff := msg.GetValue() - a.rawOutputs
+			diff := msg.GetValue() - a.rawOutputsmap[id]
 			if diff > 0 && diff < 10 {
 				//TODO: back door allways!
 
@@ -218,24 +276,25 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				if !a.countCloseDoor && (!ok || v != a.openState) {
 					a.warnLog.Printf("counting outputs when door is closed, count: %v", diff)
 				} else {
-					a.outputs += diff
+					a.outputsmap[id] += diff
 					if !a.Recovering() {
-						ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: diff})
+						ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: diff})
 					}
 				}
-				a.allOutputs += diff
+				a.allOutputsmap[id] += diff
 			} else if diff < 0 {
 				if !a.Recovering() {
-					a.warnLog.Printf("warning deviation in data -> rawOutputs: %d, GetValue() in event: %d", a.rawOutputs, msg.GetValue())
+					a.warnLog.Printf("warning deviation in data -> rawOutputs: %d, GetValue() in event: %d", a.rawOutputsmap, msg.GetValue())
 					if msg.GetValue() < 4 {
-						ctx.Send(a.events, &messages.Event{Type: messages.OUTPUT, Value: msg.GetValue()})
-						a.outputs += msg.GetValue()
-						a.allOutputs += msg.GetValue()
+						ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: msg.GetValue()})
+						a.outputsmap[id] += msg.GetValue()
+						a.allOutputsmap[id] += msg.GetValue()
 					}
 				}
 			}
-			a.rawOutputs = msg.GetValue()
+			a.rawOutputsmap[id] = msg.GetValue()
 		case messages.TAMPERING:
+			a.tamperingmap[id] += 1
 			a.warnLog.Println("tampering")
 			ctx.Send(a.events, msg)
 		}

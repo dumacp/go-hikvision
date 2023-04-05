@@ -8,25 +8,25 @@ const (
 	ShelteralarmType         = "shelteralarm"
 )
 
-//TimeRange struct
+// TimeRange struct
 type TimeRange struct {
 	StartTime string `xml:"startTime"`
 	EndTime   string `xml:"endTime"`
 }
 
-//RealTime struct
+// RealTime struct
 type RealTime struct {
 	Time string `xml:"time"`
 }
 
-//EventChildCounting struct
+// EventChildCounting struct
 type EventChildCounting struct {
 	XMLName xml.Name `xml:"childCounting"`
 	Enter   int64    `xml:"enter"`
 	Exit    int64    `xml:"exit"`
 }
 
-//EventPeopleCounting struct
+// EventPeopleCounting struct
 type EventPeopleCounting struct {
 	XMLName xml.Name `xml:"peopleCounting"`
 	// Xmlns              string `xml:"xmlns,attr"`
@@ -39,7 +39,7 @@ type EventPeopleCounting struct {
 	RegionsID int `xml:"regionsID"`
 }
 
-//EventNotificationAlert struct
+// EventNotificationAlert struct
 type EventNotificationAlert struct {
 	XMLName          xml.Name `xml:"EventNotificationAlert"`
 	ChannelID        int      `xml:"channelID"`
@@ -48,7 +48,7 @@ type EventNotificationAlert struct {
 	EventDescription string   `xml:"eventDescription"`
 }
 
-//EventNotificationAlertPeopleConting struct
+// EventNotificationAlertPeopleConting struct
 type EventNotificationAlertPeopleConting struct {
 	*EventNotificationAlert
 	DuplicatePeople int                  `xml:"duplicatePeople"`

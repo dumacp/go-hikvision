@@ -104,7 +104,7 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 		Counters []int64 `json:"counters"`
 	}{
 		frame,
-		1,
+		int(v.ID),
 		doorState,
 		contadores[0:2],
 	}
@@ -137,7 +137,7 @@ func buildEventTampering(ctx actor.Context, v *messages.Event, gps string, puert
 		Type:      "TAMPERING",
 	}
 
-	id := 1
+	id := int(v.ID)
 	val := struct {
 		Coord    string  `json:"coord"`
 		ID       int     `json:"id"`

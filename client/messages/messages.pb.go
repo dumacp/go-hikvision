@@ -5,8 +5,8 @@ package messages
 
 import (
 	fmt "fmt"
-	_ "github.com/AsynkronIT/protoactor-go/actor"
 	proto "github.com/gogo/protobuf/proto"
+	github_com_gogo_protobuf_sortkeys "github.com/gogo/protobuf/sortkeys"
 	io "io"
 	math "math"
 	math_bits "math/bits"
@@ -56,6 +56,7 @@ func (Event_EventType) EnumDescriptor() ([]byte, []int) {
 type Event struct {
 	Type  Event_EventType `protobuf:"varint,1,opt,name=type,proto3,enum=messages.Event_EventType" json:"type,omitempty"`
 	Value int64           `protobuf:"varint,2,opt,name=value,proto3" json:"value,omitempty"`
+	ID    int32           `protobuf:"varint,3,opt,name=ID,proto3" json:"ID,omitempty"`
 }
 
 func (m *Event) Reset()      { *m = Event{} }
@@ -104,13 +105,27 @@ func (m *Event) GetValue() int64 {
 	return 0
 }
 
+func (m *Event) GetID() int32 {
+	if m != nil {
+		return m.ID
+	}
+	return 0
+}
+
 type Snapshot struct {
-	Inputs     int64 `protobuf:"varint,1,opt,name=Inputs,proto3" json:"Inputs,omitempty"`
-	Outputs    int64 `protobuf:"varint,2,opt,name=Outputs,proto3" json:"Outputs,omitempty"`
-	RawInputs  int64 `protobuf:"varint,3,opt,name=RawInputs,proto3" json:"RawInputs,omitempty"`
-	RawOutputs int64 `protobuf:"varint,4,opt,name=RawOutputs,proto3" json:"RawOutputs,omitempty"`
-	AllInputs  int64 `protobuf:"varint,5,opt,name=AllInputs,proto3" json:"AllInputs,omitempty"`
-	AllOutputs int64 `protobuf:"varint,6,opt,name=AllOutputs,proto3" json:"AllOutputs,omitempty"`
+	Inputs        int64           `protobuf:"varint,1,opt,name=Inputs,proto3" json:"Inputs,omitempty"`
+	Outputs       int64           `protobuf:"varint,2,opt,name=Outputs,proto3" json:"Outputs,omitempty"`
+	RawInputs     int64           `protobuf:"varint,3,opt,name=RawInputs,proto3" json:"RawInputs,omitempty"`
+	RawOutputs    int64           `protobuf:"varint,4,opt,name=RawOutputs,proto3" json:"RawOutputs,omitempty"`
+	AllInputs     int64           `protobuf:"varint,5,opt,name=AllInputs,proto3" json:"AllInputs,omitempty"`
+	AllOutputs    int64           `protobuf:"varint,6,opt,name=AllOutputs,proto3" json:"AllOutputs,omitempty"`
+	InputsMap     map[int32]int64 `protobuf:"bytes,11,rep,name=inputsMap,proto3" json:"inputsMap,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	OutputsMap    map[int32]int64 `protobuf:"bytes,12,rep,name=outputsMap,proto3" json:"outputsMap,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	RawInputsMap  map[int32]int64 `protobuf:"bytes,13,rep,name=rawInputsMap,proto3" json:"rawInputsMap,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	RawOutputsMap map[int32]int64 `protobuf:"bytes,14,rep,name=rawOutputsMap,proto3" json:"rawOutputsMap,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	AllInputsMap  map[int32]int64 `protobuf:"bytes,15,rep,name=allInputsMap,proto3" json:"allInputsMap,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	AllOutputsMap map[int32]int64 `protobuf:"bytes,16,rep,name=allOutputsMap,proto3" json:"allOutputsMap,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	TamperingMap  map[int32]int64 `protobuf:"bytes,17,rep,name=tamperingMap,proto3" json:"tamperingMap,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
 }
 
 func (m *Snapshot) Reset()      { *m = Snapshot{} }
@@ -185,6 +200,55 @@ func (m *Snapshot) GetAllOutputs() int64 {
 		return m.AllOutputs
 	}
 	return 0
+}
+
+func (m *Snapshot) GetInputsMap() map[int32]int64 {
+	if m != nil {
+		return m.InputsMap
+	}
+	return nil
+}
+
+func (m *Snapshot) GetOutputsMap() map[int32]int64 {
+	if m != nil {
+		return m.OutputsMap
+	}
+	return nil
+}
+
+func (m *Snapshot) GetRawInputsMap() map[int32]int64 {
+	if m != nil {
+		return m.RawInputsMap
+	}
+	return nil
+}
+
+func (m *Snapshot) GetRawOutputsMap() map[int32]int64 {
+	if m != nil {
+		return m.RawOutputsMap
+	}
+	return nil
+}
+
+func (m *Snapshot) GetAllInputsMap() map[int32]int64 {
+	if m != nil {
+		return m.AllInputsMap
+	}
+	return nil
+}
+
+func (m *Snapshot) GetAllOutputsMap() map[int32]int64 {
+	if m != nil {
+		return m.AllOutputsMap
+	}
+	return nil
+}
+
+func (m *Snapshot) GetTamperingMap() map[int32]int64 {
+	if m != nil {
+		return m.TamperingMap
+	}
+	return nil
 }
 
 type CountingActor struct {
@@ -579,6 +643,13 @@ func init() {
 	proto.RegisterEnum("messages.Event_EventType", Event_EventType_name, Event_EventType_value)
 	proto.RegisterType((*Event)(nil), "messages.Event")
 	proto.RegisterType((*Snapshot)(nil), "messages.Snapshot")
+	proto.RegisterMapType((map[int32]int64)(nil), "messages.Snapshot.AllInputsMapEntry")
+	proto.RegisterMapType((map[int32]int64)(nil), "messages.Snapshot.AllOutputsMapEntry")
+	proto.RegisterMapType((map[int32]int64)(nil), "messages.Snapshot.InputsMapEntry")
+	proto.RegisterMapType((map[int32]int64)(nil), "messages.Snapshot.OutputsMapEntry")
+	proto.RegisterMapType((map[int32]int64)(nil), "messages.Snapshot.RawInputsMapEntry")
+	proto.RegisterMapType((map[int32]int64)(nil), "messages.Snapshot.RawOutputsMapEntry")
+	proto.RegisterMapType((map[int32]int64)(nil), "messages.Snapshot.TamperingMapEntry")
 	proto.RegisterType((*CountingActor)(nil), "messages.CountingActor")
 	proto.RegisterType((*CameraConfig)(nil), "messages.CameraConfig")
 	proto.RegisterType((*Start)(nil), "messages.Start")
@@ -593,39 +664,51 @@ func init() {
 func init() { proto.RegisterFile("messages.proto", fileDescriptor_4dc296cbfe5ffcd5) }
 
 var fileDescriptor_4dc296cbfe5ffcd5 = []byte{
-	// 506 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x92, 0xcf, 0x6e, 0xd3, 0x40,
-	0x10, 0xc6, 0xbd, 0xf9, 0xef, 0x11, 0x09, 0xd1, 0x52, 0xa1, 0x50, 0xa1, 0x55, 0xb5, 0x07, 0xd4,
-	0x4b, 0x13, 0x09, 0x10, 0x12, 0x12, 0x17, 0x93, 0x46, 0xc5, 0x07, 0xd2, 0x68, 0x93, 0xdc, 0xd9,
-	0xb6, 0x5b, 0x37, 0xc2, 0xd9, 0x35, 0xde, 0x75, 0xab, 0xdc, 0x38, 0x73, 0xe2, 0x31, 0x78, 0x04,
-	0x1e, 0x81, 0x63, 0x8e, 0x3d, 0x12, 0xe7, 0xc2, 0xb1, 0x8f, 0x80, 0xbc, 0xb6, 0x53, 0x38, 0xf6,
-	0x62, 0xcd, 0xf7, 0xcd, 0xfc, 0x76, 0x66, 0xbc, 0x0b, 0x9d, 0xa5, 0xd0, 0x9a, 0x07, 0x42, 0xf7,
-	0xa3, 0x58, 0x19, 0x85, 0x5b, 0xa5, 0xde, 0x7f, 0x13, 0x2c, 0xcc, 0x55, 0x72, 0xd6, 0x3f, 0x57,
-	0xcb, 0x81, 0xa7, 0x57, 0xf2, 0x73, 0xac, 0xa4, 0x3f, 0x1b, 0xd8, 0x32, 0x7e, 0x6e, 0x54, 0x7c,
-	0x14, 0xa8, 0x81, 0x0d, 0x72, 0xaf, 0x38, 0x81, 0x7e, 0x43, 0x50, 0x1f, 0x5d, 0x0b, 0x69, 0xf0,
-	0x11, 0xd4, 0xcc, 0x2a, 0x12, 0x3d, 0x74, 0x80, 0x0e, 0x3b, 0x2f, 0x9f, 0xf5, 0x77, 0xad, 0x6c,
-	0x3a, 0xff, 0xce, 0x56, 0x91, 0x60, 0xb6, 0x0c, 0xef, 0x41, 0xfd, 0x9a, 0x87, 0x89, 0xe8, 0x55,
-	0x0e, 0xd0, 0x61, 0x95, 0xe5, 0x82, 0xbe, 0x03, 0x77, 0x57, 0x88, 0x5d, 0xa8, 0xfb, 0xe3, 0xc9,
-	0x7c, 0xd6, 0x75, 0x30, 0x40, 0xe3, 0x74, 0x3e, 0xcb, 0x62, 0x94, 0xd9, 0xd3, 0xe1, 0x68, 0x3c,
-	0xea, 0x56, 0x70, 0x1b, 0xdc, 0x99, 0xf7, 0x71, 0x32, 0x62, 0xfe, 0xf8, 0xa4, 0x5b, 0xa5, 0x3f,
-	0x11, 0xb4, 0xa6, 0x92, 0x47, 0xfa, 0x4a, 0x19, 0xfc, 0x14, 0x1a, 0xbe, 0x8c, 0x12, 0xa3, 0xed,
-	0x44, 0x55, 0x56, 0x28, 0xdc, 0x83, 0xe6, 0x69, 0x62, 0x6c, 0x22, 0x6f, 0x5d, 0x4a, 0xfc, 0x1c,
-	0x5c, 0xc6, 0x6f, 0x0a, 0xa8, 0x6a, 0x73, 0xf7, 0x06, 0x26, 0x00, 0x8c, 0xdf, 0x94, 0x68, 0xcd,
-	0xa6, 0xff, 0x71, 0x32, 0xda, 0x0b, 0xc3, 0x82, 0xae, 0xe7, 0xf4, 0xce, 0xc8, 0x68, 0x2f, 0x0c,
-	0x4b, 0xba, 0x91, 0xd3, 0xf7, 0x0e, 0x7d, 0x0b, 0xed, 0xa1, 0x4a, 0xa4, 0x59, 0xc8, 0xc0, 0xcb,
-	0xfe, 0x72, 0x36, 0xa6, 0x77, 0x71, 0x11, 0x0b, 0x9d, 0xcf, 0xef, 0xb2, 0x52, 0xe2, 0x0e, 0x54,
-	0xfc, 0x63, 0x3b, 0xbb, 0xcb, 0x2a, 0xfe, 0x31, 0xfd, 0x04, 0x8f, 0x86, 0x7c, 0x29, 0x62, 0x3e,
-	0x54, 0xf2, 0x72, 0x11, 0xe0, 0x2e, 0x54, 0xe7, 0x71, 0x58, 0x50, 0x59, 0x88, 0xf7, 0xa1, 0xf5,
-	0x41, 0x69, 0x23, 0xf9, 0x52, 0x14, 0xdc, 0x4e, 0x63, 0x0c, 0xb5, 0x89, 0x8a, 0x8d, 0xdd, 0xd7,
-	0x65, 0x36, 0xb6, 0x1d, 0x26, 0x76, 0xc5, 0xac, 0xc3, 0x84, 0x36, 0xa1, 0x3e, 0x35, 0x3c, 0x36,
-	0xb4, 0x01, 0xb5, 0xa9, 0x51, 0x11, 0x75, 0xa1, 0xc9, 0x84, 0xb6, 0xd6, 0x63, 0x68, 0x4f, 0x0d,
-	0x37, 0x89, 0x66, 0xe2, 0x4b, 0x22, 0xb4, 0xa1, 0x2f, 0xa0, 0x53, 0x1a, 0x3a, 0x52, 0x52, 0xdb,
-	0xab, 0xd6, 0x86, 0x1b, 0x51, 0x8c, 0x94, 0x0b, 0xba, 0x07, 0xd8, 0x97, 0x97, 0xca, 0x6e, 0x2d,
-	0xe2, 0x92, 0x3e, 0x81, 0x27, 0xff, 0xb9, 0xc5, 0x11, 0x0f, 0xbe, 0xcc, 0xf7, 0xaf, 0xd7, 0x1b,
-	0xe2, 0xdc, 0x6e, 0x88, 0x73, 0xb7, 0x21, 0xe8, 0x6b, 0x4a, 0xd0, 0x8f, 0x94, 0xa0, 0x5f, 0x29,
-	0x41, 0xeb, 0x94, 0xa0, 0xdf, 0x29, 0x41, 0x7f, 0x52, 0xe2, 0xdc, 0xa5, 0x04, 0x7d, 0xdf, 0x12,
-	0x67, 0xbd, 0x25, 0xce, 0xed, 0x96, 0x38, 0x67, 0x0d, 0xfb, 0xaa, 0x5f, 0xfd, 0x0d, 0x00, 0x00,
-	0xff, 0xff, 0xca, 0x8b, 0xfa, 0xbc, 0x29, 0x03, 0x00, 0x00,
+	// 690 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x95, 0xcf, 0x6f, 0x12, 0x41,
+	0x14, 0xc7, 0x19, 0x60, 0x29, 0xfb, 0x5a, 0x28, 0x1d, 0x1b, 0x83, 0x8d, 0x99, 0xe0, 0x46, 0x0d,
+	0x17, 0x7b, 0xa8, 0x1e, 0xd4, 0xd4, 0xd4, 0x2d, 0x25, 0xed, 0xc6, 0xb4, 0x25, 0x03, 0xbd, 0x3b,
+	0xda, 0x29, 0x12, 0x61, 0x77, 0xdd, 0x1d, 0xda, 0x70, 0xf3, 0x4f, 0xf0, 0xec, 0x5f, 0xe0, 0x9f,
+	0xe2, 0xb1, 0xc7, 0x1e, 0xed, 0xf6, 0xe2, 0xb1, 0x57, 0x6f, 0x66, 0x66, 0x7f, 0xb0, 0x14, 0x7a,
+	0xd8, 0x0b, 0x99, 0xf7, 0xe6, 0x7d, 0xbe, 0xf3, 0x9d, 0x79, 0xf0, 0x80, 0xea, 0x88, 0xfb, 0x3e,
+	0xeb, 0x73, 0x7f, 0xd3, 0xf5, 0x1c, 0xe1, 0xe0, 0x72, 0x1c, 0x1b, 0x3f, 0x11, 0x68, 0xed, 0x73,
+	0x6e, 0x0b, 0xfc, 0x02, 0x8a, 0x62, 0xe2, 0xf2, 0x3a, 0x6a, 0xa0, 0x66, 0x75, 0xeb, 0xd1, 0x66,
+	0x82, 0xa8, 0xed, 0xf0, 0xb3, 0x37, 0x71, 0x39, 0x55, 0x65, 0x78, 0x1d, 0xb4, 0x73, 0x36, 0x1c,
+	0xf3, 0x7a, 0xbe, 0x81, 0x9a, 0x05, 0x1a, 0x06, 0xb8, 0x0a, 0x79, 0x6b, 0xaf, 0x5e, 0x68, 0xa0,
+	0xa6, 0x46, 0xf3, 0xd6, 0x9e, 0xb1, 0x0d, 0x7a, 0x02, 0x62, 0x1d, 0x34, 0xeb, 0xa8, 0x73, 0xd2,
+	0xab, 0xe5, 0x30, 0x40, 0xe9, 0xf8, 0xa4, 0x27, 0xd7, 0x48, 0xa6, 0xbb, 0xad, 0xf6, 0x51, 0xbb,
+	0x96, 0xc7, 0x15, 0xd0, 0x7b, 0xe6, 0x61, 0xa7, 0x4d, 0xad, 0xa3, 0xfd, 0x5a, 0xc1, 0xf8, 0x57,
+	0x86, 0x72, 0xd7, 0x66, 0xae, 0xff, 0xc5, 0x11, 0xf8, 0x21, 0x94, 0x2c, 0xdb, 0x1d, 0x0b, 0x5f,
+	0x39, 0x2c, 0xd0, 0x28, 0xc2, 0x75, 0x58, 0x3a, 0x1e, 0x0b, 0xb5, 0x11, 0x5a, 0x89, 0x43, 0xfc,
+	0x18, 0x74, 0xca, 0x2e, 0x22, 0xa8, 0xa0, 0xf6, 0xa6, 0x09, 0x4c, 0x00, 0x28, 0xbb, 0x88, 0xd1,
+	0xa2, 0xda, 0x4e, 0x65, 0x24, 0x6d, 0x0e, 0x87, 0x11, 0xad, 0x85, 0x74, 0x92, 0x90, 0xb4, 0x39,
+	0x1c, 0xc6, 0x74, 0x29, 0xa4, 0xa7, 0x19, 0xbc, 0x03, 0xfa, 0x40, 0x55, 0x1e, 0x32, 0xb7, 0xbe,
+	0xdc, 0x28, 0x34, 0x97, 0xb7, 0x9e, 0x4c, 0x9f, 0x34, 0xbe, 0xd4, 0xa6, 0x15, 0xd7, 0xb4, 0x6d,
+	0xe1, 0x4d, 0xe8, 0x94, 0xc1, 0xbb, 0x00, 0x4e, 0xa8, 0x25, 0x15, 0x56, 0x94, 0x82, 0xb1, 0x40,
+	0xe1, 0x38, 0x29, 0x0a, 0x25, 0x52, 0x14, 0x3e, 0x80, 0x15, 0x2f, 0xbe, 0xaf, 0x54, 0xa9, 0x28,
+	0x95, 0xa7, 0x0b, 0x54, 0x68, 0xaa, 0x2c, 0xd4, 0x99, 0x21, 0xf1, 0x07, 0xa8, 0x78, 0xc9, 0xd3,
+	0x48, 0xa9, 0xaa, 0x92, 0x7a, 0xb6, 0x58, 0xea, 0xae, 0xa7, 0x59, 0x56, 0xda, 0x62, 0xf1, 0x43,
+	0x4a, 0xad, 0xd5, 0x7b, 0x6d, 0x99, 0xa9, 0xb2, 0xc8, 0x56, 0x9a, 0x94, 0xb6, 0x58, 0xf2, 0xe6,
+	0x52, 0xaa, 0x76, 0xaf, 0x2d, 0x33, 0x5d, 0x17, 0xd9, 0x9a, 0x61, 0xa5, 0x2d, 0xc1, 0x46, 0x2e,
+	0xf7, 0x06, 0x76, 0x5f, 0x6a, 0xad, 0xdd, 0x6b, 0xab, 0x97, 0x2a, 0x8b, 0x6c, 0xa5, 0xc9, 0x8d,
+	0x6d, 0xa8, 0xce, 0xda, 0xc6, 0x35, 0x28, 0x7c, 0xe5, 0x13, 0xf5, 0xcd, 0xd5, 0xa8, 0x5c, 0x2e,
+	0xfe, 0xfd, 0xbc, 0xcd, 0xbf, 0x46, 0x1b, 0xef, 0x60, 0xf5, 0x8e, 0xd3, 0x4c, 0xf8, 0x0e, 0xac,
+	0xcd, 0x75, 0x33, 0x93, 0xc0, 0x7b, 0xc0, 0xf3, 0x3d, 0xcc, 0x6a, 0x61, 0xae, 0x73, 0x59, 0x2d,
+	0xcc, 0xf7, 0x2b, 0xab, 0x85, 0xb9, 0x2e, 0x65, 0x11, 0x30, 0xde, 0x40, 0xa5, 0xe5, 0x8c, 0x6d,
+	0x31, 0xb0, 0xfb, 0xe6, 0x67, 0xe1, 0x78, 0x72, 0xce, 0x98, 0xa7, 0xa7, 0x1e, 0xf7, 0xc3, 0x01,
+	0xa4, 0xd3, 0x38, 0x8c, 0x86, 0x5e, 0x5e, 0x25, 0xe5, 0xd0, 0xfb, 0x08, 0x2b, 0x2d, 0x36, 0xe2,
+	0x1e, 0x6b, 0x39, 0xf6, 0xd9, 0xa0, 0x2f, 0x8f, 0x3d, 0xf1, 0x86, 0x11, 0x25, 0x97, 0x78, 0x03,
+	0xca, 0x07, 0x8e, 0x2f, 0x6c, 0x36, 0xe2, 0x11, 0x97, 0xc4, 0x18, 0x43, 0xb1, 0xe3, 0x78, 0x42,
+	0x0d, 0x2c, 0x9d, 0xaa, 0xb5, 0x3a, 0xa1, 0xa3, 0x66, 0x94, 0x3c, 0xa1, 0x63, 0x2c, 0x81, 0xd6,
+	0x15, 0xcc, 0x13, 0x46, 0x09, 0x8a, 0x5d, 0xe1, 0xb8, 0x86, 0x0e, 0x4b, 0x94, 0xfb, 0x2a, 0xb5,
+	0x0a, 0x95, 0xae, 0x60, 0x62, 0xec, 0x53, 0xfe, 0x6d, 0xcc, 0x7d, 0x61, 0x3c, 0x87, 0x6a, 0x9c,
+	0xf0, 0x5d, 0xc7, 0xf6, 0xd5, 0xec, 0xf6, 0x05, 0x13, 0x3c, 0xb2, 0x14, 0x06, 0xc6, 0x3a, 0x60,
+	0xcb, 0x3e, 0x73, 0xd4, 0xad, 0xb9, 0x17, 0xd3, 0xfb, 0xf0, 0x60, 0x26, 0x1b, 0x49, 0x64, 0x9e,
+	0xc6, 0xbb, 0xaf, 0x2e, 0xaf, 0x49, 0xee, 0xea, 0x9a, 0xe4, 0x6e, 0xaf, 0x09, 0xfa, 0x1e, 0x10,
+	0xf4, 0x2b, 0x20, 0xe8, 0x77, 0x40, 0xd0, 0x65, 0x40, 0xd0, 0x9f, 0x80, 0xa0, 0xbf, 0x01, 0xc9,
+	0xdd, 0x06, 0x04, 0xfd, 0xb8, 0x21, 0xb9, 0xcb, 0x1b, 0x92, 0xbb, 0xba, 0x21, 0xb9, 0x4f, 0x25,
+	0xf5, 0x87, 0xf5, 0xf2, 0x7f, 0x00, 0x00, 0x00, 0xff, 0xff, 0xee, 0x63, 0x31, 0xc7, 0xc2, 0x06,
+	0x00, 0x00,
 }
 
 func (x Event_EventType) String() string {
@@ -658,6 +741,9 @@ func (this *Event) Equal(that interface{}) bool {
 		return false
 	}
 	if this.Value != that1.Value {
+		return false
+	}
+	if this.ID != that1.ID {
 		return false
 	}
 	return true
@@ -698,6 +784,62 @@ func (this *Snapshot) Equal(that interface{}) bool {
 	}
 	if this.AllOutputs != that1.AllOutputs {
 		return false
+	}
+	if len(this.InputsMap) != len(that1.InputsMap) {
+		return false
+	}
+	for i := range this.InputsMap {
+		if this.InputsMap[i] != that1.InputsMap[i] {
+			return false
+		}
+	}
+	if len(this.OutputsMap) != len(that1.OutputsMap) {
+		return false
+	}
+	for i := range this.OutputsMap {
+		if this.OutputsMap[i] != that1.OutputsMap[i] {
+			return false
+		}
+	}
+	if len(this.RawInputsMap) != len(that1.RawInputsMap) {
+		return false
+	}
+	for i := range this.RawInputsMap {
+		if this.RawInputsMap[i] != that1.RawInputsMap[i] {
+			return false
+		}
+	}
+	if len(this.RawOutputsMap) != len(that1.RawOutputsMap) {
+		return false
+	}
+	for i := range this.RawOutputsMap {
+		if this.RawOutputsMap[i] != that1.RawOutputsMap[i] {
+			return false
+		}
+	}
+	if len(this.AllInputsMap) != len(that1.AllInputsMap) {
+		return false
+	}
+	for i := range this.AllInputsMap {
+		if this.AllInputsMap[i] != that1.AllInputsMap[i] {
+			return false
+		}
+	}
+	if len(this.AllOutputsMap) != len(that1.AllOutputsMap) {
+		return false
+	}
+	for i := range this.AllOutputsMap {
+		if this.AllOutputsMap[i] != that1.AllOutputsMap[i] {
+			return false
+		}
+	}
+	if len(this.TamperingMap) != len(that1.TamperingMap) {
+		return false
+	}
+	for i := range this.TamperingMap {
+		if this.TamperingMap[i] != that1.TamperingMap[i] {
+			return false
+		}
 	}
 	return true
 }
@@ -921,10 +1063,11 @@ func (this *Event) GoString() string {
 	if this == nil {
 		return "nil"
 	}
-	s := make([]string, 0, 6)
+	s := make([]string, 0, 7)
 	s = append(s, "&messages.Event{")
 	s = append(s, "Type: "+fmt.Sprintf("%#v", this.Type)+",\n")
 	s = append(s, "Value: "+fmt.Sprintf("%#v", this.Value)+",\n")
+	s = append(s, "ID: "+fmt.Sprintf("%#v", this.ID)+",\n")
 	s = append(s, "}")
 	return strings.Join(s, "")
 }
@@ -932,7 +1075,7 @@ func (this *Snapshot) GoString() string {
 	if this == nil {
 		return "nil"
 	}
-	s := make([]string, 0, 10)
+	s := make([]string, 0, 17)
 	s = append(s, "&messages.Snapshot{")
 	s = append(s, "Inputs: "+fmt.Sprintf("%#v", this.Inputs)+",\n")
 	s = append(s, "Outputs: "+fmt.Sprintf("%#v", this.Outputs)+",\n")
@@ -940,6 +1083,97 @@ func (this *Snapshot) GoString() string {
 	s = append(s, "RawOutputs: "+fmt.Sprintf("%#v", this.RawOutputs)+",\n")
 	s = append(s, "AllInputs: "+fmt.Sprintf("%#v", this.AllInputs)+",\n")
 	s = append(s, "AllOutputs: "+fmt.Sprintf("%#v", this.AllOutputs)+",\n")
+	keysForInputsMap := make([]int32, 0, len(this.InputsMap))
+	for k, _ := range this.InputsMap {
+		keysForInputsMap = append(keysForInputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForInputsMap)
+	mapStringForInputsMap := "map[int32]int64{"
+	for _, k := range keysForInputsMap {
+		mapStringForInputsMap += fmt.Sprintf("%#v: %#v,", k, this.InputsMap[k])
+	}
+	mapStringForInputsMap += "}"
+	if this.InputsMap != nil {
+		s = append(s, "InputsMap: "+mapStringForInputsMap+",\n")
+	}
+	keysForOutputsMap := make([]int32, 0, len(this.OutputsMap))
+	for k, _ := range this.OutputsMap {
+		keysForOutputsMap = append(keysForOutputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForOutputsMap)
+	mapStringForOutputsMap := "map[int32]int64{"
+	for _, k := range keysForOutputsMap {
+		mapStringForOutputsMap += fmt.Sprintf("%#v: %#v,", k, this.OutputsMap[k])
+	}
+	mapStringForOutputsMap += "}"
+	if this.OutputsMap != nil {
+		s = append(s, "OutputsMap: "+mapStringForOutputsMap+",\n")
+	}
+	keysForRawInputsMap := make([]int32, 0, len(this.RawInputsMap))
+	for k, _ := range this.RawInputsMap {
+		keysForRawInputsMap = append(keysForRawInputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForRawInputsMap)
+	mapStringForRawInputsMap := "map[int32]int64{"
+	for _, k := range keysForRawInputsMap {
+		mapStringForRawInputsMap += fmt.Sprintf("%#v: %#v,", k, this.RawInputsMap[k])
+	}
+	mapStringForRawInputsMap += "}"
+	if this.RawInputsMap != nil {
+		s = append(s, "RawInputsMap: "+mapStringForRawInputsMap+",\n")
+	}
+	keysForRawOutputsMap := make([]int32, 0, len(this.RawOutputsMap))
+	for k, _ := range this.RawOutputsMap {
+		keysForRawOutputsMap = append(keysForRawOutputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForRawOutputsMap)
+	mapStringForRawOutputsMap := "map[int32]int64{"
+	for _, k := range keysForRawOutputsMap {
+		mapStringForRawOutputsMap += fmt.Sprintf("%#v: %#v,", k, this.RawOutputsMap[k])
+	}
+	mapStringForRawOutputsMap += "}"
+	if this.RawOutputsMap != nil {
+		s = append(s, "RawOutputsMap: "+mapStringForRawOutputsMap+",\n")
+	}
+	keysForAllInputsMap := make([]int32, 0, len(this.AllInputsMap))
+	for k, _ := range this.AllInputsMap {
+		keysForAllInputsMap = append(keysForAllInputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForAllInputsMap)
+	mapStringForAllInputsMap := "map[int32]int64{"
+	for _, k := range keysForAllInputsMap {
+		mapStringForAllInputsMap += fmt.Sprintf("%#v: %#v,", k, this.AllInputsMap[k])
+	}
+	mapStringForAllInputsMap += "}"
+	if this.AllInputsMap != nil {
+		s = append(s, "AllInputsMap: "+mapStringForAllInputsMap+",\n")
+	}
+	keysForAllOutputsMap := make([]int32, 0, len(this.AllOutputsMap))
+	for k, _ := range this.AllOutputsMap {
+		keysForAllOutputsMap = append(keysForAllOutputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForAllOutputsMap)
+	mapStringForAllOutputsMap := "map[int32]int64{"
+	for _, k := range keysForAllOutputsMap {
+		mapStringForAllOutputsMap += fmt.Sprintf("%#v: %#v,", k, this.AllOutputsMap[k])
+	}
+	mapStringForAllOutputsMap += "}"
+	if this.AllOutputsMap != nil {
+		s = append(s, "AllOutputsMap: "+mapStringForAllOutputsMap+",\n")
+	}
+	keysForTamperingMap := make([]int32, 0, len(this.TamperingMap))
+	for k, _ := range this.TamperingMap {
+		keysForTamperingMap = append(keysForTamperingMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForTamperingMap)
+	mapStringForTamperingMap := "map[int32]int64{"
+	for _, k := range keysForTamperingMap {
+		mapStringForTamperingMap += fmt.Sprintf("%#v: %#v,", k, this.TamperingMap[k])
+	}
+	mapStringForTamperingMap += "}"
+	if this.TamperingMap != nil {
+		s = append(s, "TamperingMap: "+mapStringForTamperingMap+",\n")
+	}
 	s = append(s, "}")
 	return strings.Join(s, "")
 }
@@ -1061,6 +1295,11 @@ func (m *Event) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.ID != 0 {
+		i = encodeVarintMessages(dAtA, i, uint64(m.ID))
+		i--
+		dAtA[i] = 0x18
+	}
 	if m.Value != 0 {
 		i = encodeVarintMessages(dAtA, i, uint64(m.Value))
 		i--
@@ -1094,6 +1333,115 @@ func (m *Snapshot) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if len(m.TamperingMap) > 0 {
+		for k := range m.TamperingMap {
+			v := m.TamperingMap[k]
+			baseI := i
+			i = encodeVarintMessages(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i = encodeVarintMessages(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintMessages(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x1
+			i--
+			dAtA[i] = 0x8a
+		}
+	}
+	if len(m.AllOutputsMap) > 0 {
+		for k := range m.AllOutputsMap {
+			v := m.AllOutputsMap[k]
+			baseI := i
+			i = encodeVarintMessages(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i = encodeVarintMessages(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintMessages(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x1
+			i--
+			dAtA[i] = 0x82
+		}
+	}
+	if len(m.AllInputsMap) > 0 {
+		for k := range m.AllInputsMap {
+			v := m.AllInputsMap[k]
+			baseI := i
+			i = encodeVarintMessages(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i = encodeVarintMessages(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintMessages(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x7a
+		}
+	}
+	if len(m.RawOutputsMap) > 0 {
+		for k := range m.RawOutputsMap {
+			v := m.RawOutputsMap[k]
+			baseI := i
+			i = encodeVarintMessages(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i = encodeVarintMessages(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintMessages(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x72
+		}
+	}
+	if len(m.RawInputsMap) > 0 {
+		for k := range m.RawInputsMap {
+			v := m.RawInputsMap[k]
+			baseI := i
+			i = encodeVarintMessages(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i = encodeVarintMessages(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintMessages(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x6a
+		}
+	}
+	if len(m.OutputsMap) > 0 {
+		for k := range m.OutputsMap {
+			v := m.OutputsMap[k]
+			baseI := i
+			i = encodeVarintMessages(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i = encodeVarintMessages(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintMessages(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x62
+		}
+	}
+	if len(m.InputsMap) > 0 {
+		for k := range m.InputsMap {
+			v := m.InputsMap[k]
+			baseI := i
+			i = encodeVarintMessages(dAtA, i, uint64(v))
+			i--
+			dAtA[i] = 0x10
+			i = encodeVarintMessages(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintMessages(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x5a
+		}
+	}
 	if m.AllOutputs != 0 {
 		i = encodeVarintMessages(dAtA, i, uint64(m.AllOutputs))
 		i--
@@ -1416,6 +1764,9 @@ func (m *Event) Size() (n int) {
 	if m.Value != 0 {
 		n += 1 + sovMessages(uint64(m.Value))
 	}
+	if m.ID != 0 {
+		n += 1 + sovMessages(uint64(m.ID))
+	}
 	return n
 }
 
@@ -1442,6 +1793,62 @@ func (m *Snapshot) Size() (n int) {
 	}
 	if m.AllOutputs != 0 {
 		n += 1 + sovMessages(uint64(m.AllOutputs))
+	}
+	if len(m.InputsMap) > 0 {
+		for k, v := range m.InputsMap {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + sovMessages(uint64(k)) + 1 + sovMessages(uint64(v))
+			n += mapEntrySize + 1 + sovMessages(uint64(mapEntrySize))
+		}
+	}
+	if len(m.OutputsMap) > 0 {
+		for k, v := range m.OutputsMap {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + sovMessages(uint64(k)) + 1 + sovMessages(uint64(v))
+			n += mapEntrySize + 1 + sovMessages(uint64(mapEntrySize))
+		}
+	}
+	if len(m.RawInputsMap) > 0 {
+		for k, v := range m.RawInputsMap {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + sovMessages(uint64(k)) + 1 + sovMessages(uint64(v))
+			n += mapEntrySize + 1 + sovMessages(uint64(mapEntrySize))
+		}
+	}
+	if len(m.RawOutputsMap) > 0 {
+		for k, v := range m.RawOutputsMap {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + sovMessages(uint64(k)) + 1 + sovMessages(uint64(v))
+			n += mapEntrySize + 1 + sovMessages(uint64(mapEntrySize))
+		}
+	}
+	if len(m.AllInputsMap) > 0 {
+		for k, v := range m.AllInputsMap {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + sovMessages(uint64(k)) + 1 + sovMessages(uint64(v))
+			n += mapEntrySize + 1 + sovMessages(uint64(mapEntrySize))
+		}
+	}
+	if len(m.AllOutputsMap) > 0 {
+		for k, v := range m.AllOutputsMap {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + sovMessages(uint64(k)) + 1 + sovMessages(uint64(v))
+			n += mapEntrySize + 2 + sovMessages(uint64(mapEntrySize))
+		}
+	}
+	if len(m.TamperingMap) > 0 {
+		for k, v := range m.TamperingMap {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + sovMessages(uint64(k)) + 1 + sovMessages(uint64(v))
+			n += mapEntrySize + 2 + sovMessages(uint64(mapEntrySize))
+		}
 	}
 	return n
 }
@@ -1574,6 +1981,7 @@ func (this *Event) String() string {
 	s := strings.Join([]string{`&Event{`,
 		`Type:` + fmt.Sprintf("%v", this.Type) + `,`,
 		`Value:` + fmt.Sprintf("%v", this.Value) + `,`,
+		`ID:` + fmt.Sprintf("%v", this.ID) + `,`,
 		`}`,
 	}, "")
 	return s
@@ -1582,6 +1990,76 @@ func (this *Snapshot) String() string {
 	if this == nil {
 		return "nil"
 	}
+	keysForInputsMap := make([]int32, 0, len(this.InputsMap))
+	for k, _ := range this.InputsMap {
+		keysForInputsMap = append(keysForInputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForInputsMap)
+	mapStringForInputsMap := "map[int32]int64{"
+	for _, k := range keysForInputsMap {
+		mapStringForInputsMap += fmt.Sprintf("%v: %v,", k, this.InputsMap[k])
+	}
+	mapStringForInputsMap += "}"
+	keysForOutputsMap := make([]int32, 0, len(this.OutputsMap))
+	for k, _ := range this.OutputsMap {
+		keysForOutputsMap = append(keysForOutputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForOutputsMap)
+	mapStringForOutputsMap := "map[int32]int64{"
+	for _, k := range keysForOutputsMap {
+		mapStringForOutputsMap += fmt.Sprintf("%v: %v,", k, this.OutputsMap[k])
+	}
+	mapStringForOutputsMap += "}"
+	keysForRawInputsMap := make([]int32, 0, len(this.RawInputsMap))
+	for k, _ := range this.RawInputsMap {
+		keysForRawInputsMap = append(keysForRawInputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForRawInputsMap)
+	mapStringForRawInputsMap := "map[int32]int64{"
+	for _, k := range keysForRawInputsMap {
+		mapStringForRawInputsMap += fmt.Sprintf("%v: %v,", k, this.RawInputsMap[k])
+	}
+	mapStringForRawInputsMap += "}"
+	keysForRawOutputsMap := make([]int32, 0, len(this.RawOutputsMap))
+	for k, _ := range this.RawOutputsMap {
+		keysForRawOutputsMap = append(keysForRawOutputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForRawOutputsMap)
+	mapStringForRawOutputsMap := "map[int32]int64{"
+	for _, k := range keysForRawOutputsMap {
+		mapStringForRawOutputsMap += fmt.Sprintf("%v: %v,", k, this.RawOutputsMap[k])
+	}
+	mapStringForRawOutputsMap += "}"
+	keysForAllInputsMap := make([]int32, 0, len(this.AllInputsMap))
+	for k, _ := range this.AllInputsMap {
+		keysForAllInputsMap = append(keysForAllInputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForAllInputsMap)
+	mapStringForAllInputsMap := "map[int32]int64{"
+	for _, k := range keysForAllInputsMap {
+		mapStringForAllInputsMap += fmt.Sprintf("%v: %v,", k, this.AllInputsMap[k])
+	}
+	mapStringForAllInputsMap += "}"
+	keysForAllOutputsMap := make([]int32, 0, len(this.AllOutputsMap))
+	for k, _ := range this.AllOutputsMap {
+		keysForAllOutputsMap = append(keysForAllOutputsMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForAllOutputsMap)
+	mapStringForAllOutputsMap := "map[int32]int64{"
+	for _, k := range keysForAllOutputsMap {
+		mapStringForAllOutputsMap += fmt.Sprintf("%v: %v,", k, this.AllOutputsMap[k])
+	}
+	mapStringForAllOutputsMap += "}"
+	keysForTamperingMap := make([]int32, 0, len(this.TamperingMap))
+	for k, _ := range this.TamperingMap {
+		keysForTamperingMap = append(keysForTamperingMap, k)
+	}
+	github_com_gogo_protobuf_sortkeys.Int32s(keysForTamperingMap)
+	mapStringForTamperingMap := "map[int32]int64{"
+	for _, k := range keysForTamperingMap {
+		mapStringForTamperingMap += fmt.Sprintf("%v: %v,", k, this.TamperingMap[k])
+	}
+	mapStringForTamperingMap += "}"
 	s := strings.Join([]string{`&Snapshot{`,
 		`Inputs:` + fmt.Sprintf("%v", this.Inputs) + `,`,
 		`Outputs:` + fmt.Sprintf("%v", this.Outputs) + `,`,
@@ -1589,6 +2067,13 @@ func (this *Snapshot) String() string {
 		`RawOutputs:` + fmt.Sprintf("%v", this.RawOutputs) + `,`,
 		`AllInputs:` + fmt.Sprintf("%v", this.AllInputs) + `,`,
 		`AllOutputs:` + fmt.Sprintf("%v", this.AllOutputs) + `,`,
+		`InputsMap:` + mapStringForInputsMap + `,`,
+		`OutputsMap:` + mapStringForOutputsMap + `,`,
+		`RawInputsMap:` + mapStringForRawInputsMap + `,`,
+		`RawOutputsMap:` + mapStringForRawOutputsMap + `,`,
+		`AllInputsMap:` + mapStringForAllInputsMap + `,`,
+		`AllOutputsMap:` + mapStringForAllOutputsMap + `,`,
+		`TamperingMap:` + mapStringForTamperingMap + `,`,
 		`}`,
 	}, "")
 	return s
@@ -1758,16 +2243,32 @@ func (m *Event) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+			}
+			m.ID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMessages
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ID |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipMessages(dAtA[iNdEx:])
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -1925,16 +2426,706 @@ func (m *Snapshot) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 11:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field InputsMap", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMessages
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthMessages
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthMessages
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.InputsMap == nil {
+				m.InputsMap = make(map[int32]int64)
+			}
+			var mapkey int32
+			var mapvalue int64
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowMessages
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapkey |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else if fieldNum == 2 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapvalue |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipMessages(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthMessages
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.InputsMap[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 12:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OutputsMap", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMessages
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthMessages
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthMessages
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.OutputsMap == nil {
+				m.OutputsMap = make(map[int32]int64)
+			}
+			var mapkey int32
+			var mapvalue int64
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowMessages
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapkey |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else if fieldNum == 2 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapvalue |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipMessages(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthMessages
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.OutputsMap[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 13:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RawInputsMap", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMessages
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthMessages
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthMessages
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RawInputsMap == nil {
+				m.RawInputsMap = make(map[int32]int64)
+			}
+			var mapkey int32
+			var mapvalue int64
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowMessages
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapkey |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else if fieldNum == 2 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapvalue |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipMessages(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthMessages
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.RawInputsMap[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 14:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RawOutputsMap", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMessages
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthMessages
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthMessages
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RawOutputsMap == nil {
+				m.RawOutputsMap = make(map[int32]int64)
+			}
+			var mapkey int32
+			var mapvalue int64
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowMessages
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapkey |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else if fieldNum == 2 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapvalue |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipMessages(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthMessages
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.RawOutputsMap[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 15:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AllInputsMap", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMessages
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthMessages
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthMessages
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.AllInputsMap == nil {
+				m.AllInputsMap = make(map[int32]int64)
+			}
+			var mapkey int32
+			var mapvalue int64
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowMessages
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapkey |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else if fieldNum == 2 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapvalue |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipMessages(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthMessages
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.AllInputsMap[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 16:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AllOutputsMap", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMessages
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthMessages
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthMessages
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.AllOutputsMap == nil {
+				m.AllOutputsMap = make(map[int32]int64)
+			}
+			var mapkey int32
+			var mapvalue int64
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowMessages
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapkey |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else if fieldNum == 2 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapvalue |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipMessages(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthMessages
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.AllOutputsMap[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 17:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TamperingMap", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMessages
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthMessages
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthMessages
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.TamperingMap == nil {
+				m.TamperingMap = make(map[int32]int64)
+			}
+			var mapkey int32
+			var mapvalue int64
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowMessages
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapkey |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else if fieldNum == 2 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowMessages
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapvalue |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipMessages(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthMessages
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.TamperingMap[mapkey] = mapvalue
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipMessages(dAtA[iNdEx:])
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2048,10 +3239,7 @@ func (m *CountingActor) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2229,10 +3417,7 @@ func (m *CameraConfig) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2282,10 +3467,7 @@ func (m *Start) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2335,10 +3517,7 @@ func (m *Stop) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2388,10 +3567,7 @@ func (m *Restart) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2441,10 +3617,7 @@ func (m *StatusRequest) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2526,10 +3699,7 @@ func (m *StatusResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2579,10 +3749,7 @@ func (m *InfoCounterRequest) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {
@@ -2670,10 +3837,7 @@ func (m *InfoCounterResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMessages
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMessages
 			}
 			if (iNdEx + skippy) > l {

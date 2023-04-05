@@ -13,10 +13,10 @@ require (
 	github.com/brian-armstrong/gpio v0.0.0-20181227042754-72b0058bbbcb
 	github.com/dumacp/go-actors v0.0.0-20210923182122-b64616cc9d17
 	github.com/dumacp/go-doors v0.0.0-00010101000000-000000000000
-	github.com/dumacp/go-logs v0.0.0-00010101000000-000000000000
+	github.com/dumacp/go-logs v0.0.1
 	github.com/dumacp/gpsnmea v0.0.0-20201110195359-2994f05cfb52
 	github.com/dumacp/pubsub v0.0.0-20200115200904-f16f29d84ee0
-	github.com/eclipse/paho.mqtt.golang v1.4.1
+	github.com/eclipse/paho.mqtt.golang v1.4.2
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
 	github.com/mkch/gpio v0.0.0-20190919032813-8327cd97d95e
