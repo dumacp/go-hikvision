@@ -2,11 +2,7 @@ module github.com/dumacp/go-hikvision
 
 go 1.16
 
-replace github.com/dumacp/go-actors => ../go-actors
-
 replace github.com/dumacp/go-doors => ../go-doors
-
-replace github.com/dumacp/go-logs => ../go-logs
 
 require (
 	github.com/AsynkronIT/protoactor-go v0.0.0-20210927041136-0024968a0dd3
