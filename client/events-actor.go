@@ -17,8 +17,7 @@ const (
 // EventActor type
 type EventActor struct {
 	*Logger
-	puertas   map[uint]uint
-	openState uint
+	puertas map[uint]uint
 }
 
 // NewEventActor create EventActor
@@ -29,12 +28,10 @@ func NewEventActor() *EventActor {
 	return event
 }
 
-// SetOpenState set open state
-func (act *EventActor) SetOpenState(state uint) {
-	act.openState = state
-}
-
 type msgEvent struct {
+	data []byte
+}
+type msgAddEvent struct {
 	data []byte
 }
 
@@ -59,12 +56,14 @@ func (act *EventActor) Receive(ctx actor.Context) {
 		case messages.INPUT:
 
 			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger)
+			ctx.Send(ctx.Parent(), &msgEvent{data: event})
 		case messages.OUTPUT:
 			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger)
+			ctx.Send(ctx.Parent(), &msgEvent{data: event})
 		case messages.TAMPERING:
 			event = buildEventTampering(ctx, msg, frame, act.puertas, act.Logger)
+			ctx.Send(ctx.Parent(), &msgAddEvent{data: event})
 		}
-		ctx.Send(ctx.Parent(), &msgEvent{data: event})
 
 	case *MsgDoor:
 		act.puertas[msg.ID] = msg.Value

@@ -17,15 +17,9 @@ type CountingActor struct {
 	persistence.Mixin
 	*Logger
 	// flagRecovering bool
-	openState      uint
-	countCloseDoor bool
+	openState      map[int]uint
+	countCloseDoor map[int]bool
 	puertas        map[uint]uint
-	inputs         int64
-	outputs        int64
-	rawInputs      int64
-	rawOutputs     int64
-	allInputs      int64
-	allOutputs     int64
 	inputsmap      map[int32]int64
 	outputsmap     map[int32]int64
 	rawInputsmap   map[int32]int64
@@ -58,30 +52,29 @@ func NewCountingActor() *CountingActor {
 	}
 	count.Logger = &Logger{}
 	count.puertas = make(map[uint]uint)
+	count.countCloseDoor = make(map[int]bool)
+	count.openState = make(map[int]uint)
 	return count
 }
 
 // SetZeroOpenState set the open state in gpio door
-func (a *CountingActor) SetZeroOpenState(state bool) {
+func (a *CountingActor) SetZeroOpenState(id int, state bool) {
 	if state {
-		a.openState = 0
+		a.openState[id] = 0
 	} else {
-		a.openState = 1
+		a.openState[id] = 1
 	}
 }
 
 // SetZeroOpenState set the open state in gpio door
-func (a *CountingActor) SetCountCloseDoor(state bool) {
+func (a *CountingActor) SetCountCloseDoor(id int, state bool) {
 	if state {
-		a.countCloseDoor = true
+		a.countCloseDoor[id] = true
 	} else {
-		a.countCloseDoor = false
+		a.countCloseDoor[id] = false
 	}
 }
 
-type register struct {
-	Registers []int64 `json:"registers"`
-}
 type MsgSendRegisters struct{}
 
 // Receive function to receive message in actor
@@ -95,7 +88,6 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		time.Sleep(3 * time.Second)
 
 		events := NewEventActor()
-		events.openState = a.openState
 		events.SetLogError(a.errLog).
 			SetLogWarn(a.warnLog).
 			SetLogInfo(a.infoLog).
@@ -135,13 +127,32 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
 			a.inputsmap, a.outputsmap, a.rawInputsmap, a.rawOutputsmap, a.allInputsmap, a.allOutputsmap)
 		snap := &messages.Snapshot{
-			InputsMap:     a.inputsmap,
-			OutputsMap:    a.outputsmap,
-			RawInputsMap:  a.rawInputsmap,
-			RawOutputsMap: a.rawOutputsmap,
-			AllInputsMap:  a.allInputsmap,
-			AllOutputsMap: a.allOutputsmap,
+			InputsMap:     make(map[int32]int64),
+			OutputsMap:    make(map[int32]int64),
+			RawInputsMap:  make(map[int32]int64),
+			RawOutputsMap: make(map[int32]int64),
+			AllInputsMap:  make(map[int32]int64),
+			AllOutputsMap: make(map[int32]int64),
 		}
+		for k, v := range a.inputsmap {
+			snap.InputsMap[k] = v
+		}
+		for k, v := range a.outputsmap {
+			snap.OutputsMap[k] = v
+		}
+		for k, v := range a.rawInputsmap {
+			snap.RawInputsMap[k] = v
+		}
+		for k, v := range a.rawOutputsmap {
+			snap.RawOutputsMap[k] = v
+		}
+		for k, v := range a.allInputsmap {
+			snap.AllInputsMap[k] = v
+		}
+		for k, v := range a.allOutputsmap {
+			snap.AllOutputsMap[k] = v
+		}
+
 		a.PersistSnapshot(snap)
 		ctx.Send(ctx.Self(), &MsgSendRegisters{})
 
@@ -189,23 +200,23 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 
 		//backwards compatibility
-		if a.inputs > 0 {
-			a.inputsmap[1] = a.inputs
+		if msg.GetInputs() > 0 {
+			a.inputsmap[1] = msg.GetInputs()
 		}
-		if a.allOutputs > 0 {
-			a.outputsmap[1] = a.outputs
+		if msg.GetOutputs() > 0 {
+			a.outputsmap[1] = msg.GetOutputs()
 		}
-		if a.allInputs > 0 {
-			a.allInputsmap[1] = a.allInputs
+		if msg.GetAllInputs() > 0 {
+			a.allInputsmap[1] = msg.GetAllInputs()
 		}
-		if a.allOutputs > 0 {
-			a.allOutputsmap[1] = a.allOutputs
+		if msg.GetAllOutputs() > 0 {
+			a.allOutputsmap[1] = msg.GetAllOutputs()
 		}
-		if a.rawInputs > 0 {
-			a.rawInputsmap[1] = a.rawInputs
+		if msg.GetRawInputs() > 0 {
+			a.rawInputsmap[1] = msg.GetRawInputs()
 		}
-		if a.rawOutputs > 0 {
-			a.rawOutputsmap[1] = a.rawOutputs
+		if msg.GetRawOutputs() > 0 {
+			a.rawOutputsmap[1] = msg.GetRawOutputs()
 		}
 
 		a.infoLog.Printf("recovered from snapshot, internal state changed to:\n\tinputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
@@ -219,70 +230,86 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 	case *messages.Event:
 		id := msg.ID
 		if a.Recovering() {
-			// a.flagRecovering = true
 			scenario := "received replayed event"
-			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
-				scenario, a.inputsmap, a.outputsmap)
+			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v', msg: %s\n",
+				scenario, a.inputsmap, a.outputsmap, msg)
 		} else {
-			a.PersistReceive(msg)
 			scenario := "received new message"
-			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v'\n",
-				scenario, a.inputsmap, a.outputsmap)
+			a.buildLog.Printf("%s, internal state changed to\n\tinputs -> '%v', outputs -> '%v', msg: %v\n",
+				scenario, a.inputsmap, a.outputsmap, msg)
 		}
 		switch msg.GetType() {
 		case messages.INPUT:
 			diff := msg.GetValue() - a.rawInputsmap[id]
+			if a.Recovering() {
+				a.inputsmap[id] += diff
+				a.allInputsmap[id] += diff
+				a.rawInputsmap[id] = msg.GetValue()
+				break
+			}
 			if diff > 0 && diff < 10 {
-
 				v, ok := a.puertas[uint(id)]
-				if !a.countCloseDoor && (!ok || v != a.openState) {
-					a.warnLog.Printf("counting inputs when door is closed, count: %v", diff)
+				//TODO: default state is 1
+				if !a.countCloseDoor[int(id)] && (!ok || v != func() uint {
+					if v, ok := a.openState[int(id)]; ok {
+						return v
+					}
+					return 1
+				}()) {
+					a.warnLog.Printf("counting inputs when door (id: %d) is closed, count: %v", id, diff)
 				} else {
 					a.inputsmap[id] += diff
-					if !a.Recovering() {
-						ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: diff})
-					}
+					a.rawInputsmap[id] = msg.GetValue()
+					a.PersistReceive(msg)
+					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: diff})
 				}
 				a.allInputsmap[id] += diff
 			} else if diff < 0 {
-				if !a.Recovering() {
-					a.warnLog.Printf("warning deviation in data -> rawInputs: %d, GetValue() in event: %d", a.rawInputsmap, msg.GetValue())
-					if msg.GetValue() < 4 {
-						ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: msg.GetValue()})
-						a.inputsmap[id] += msg.GetValue()
-						a.allInputsmap[id] += msg.GetValue()
-					}
+				a.warnLog.Printf("warning deviation in data (id: %d) -> rawInputs: %d, GetValue() in event: %d", id, a.rawInputsmap, msg.GetValue())
+				if msg.GetValue() < 4 {
+					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: msg.GetValue()})
+					a.inputsmap[id] += msg.GetValue()
+					a.allInputsmap[id] += msg.GetValue()
 				}
 			} else {
-				a.warnLog.Printf("counting diff inputs > 10, diff count: %v", diff)
+				a.warnLog.Printf("counting (id: %d) diff inputs > 10, diff count: %v", id, diff)
 			}
 			a.rawInputsmap[id] = msg.GetValue()
 		case messages.OUTPUT:
 			diff := msg.GetValue() - a.rawOutputsmap[id]
+			if a.Recovering() {
+				a.outputsmap[id] += diff
+				a.allOutputsmap[id] += diff
+				a.rawOutputsmap[id] = msg.GetValue()
+				break
+			}
 			if diff > 0 && diff < 10 {
 				//TODO: back door allways!
-
 				v, ok := a.puertas[uint(id)]
-				if !a.countCloseDoor && (!ok || v != a.openState) {
-					a.warnLog.Printf("counting outputs when door is closed, count: %v", diff)
+				//TODO: default state is 1
+				if !a.countCloseDoor[int(id)] && (!ok || v != func() uint {
+					if v, ok := a.openState[int(id)]; ok {
+						return v
+					}
+					return 1
+				}()) {
+					a.warnLog.Printf("counting outputs when door (id: %d) is closed, count: %v", id, diff)
 				} else {
 					a.outputsmap[id] += diff
-					if !a.Recovering() {
-						ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: diff})
-					}
+					a.rawOutputsmap[id] = msg.GetValue()
+					a.PersistReceive(msg)
+					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: diff})
 				}
 				a.allOutputsmap[id] += diff
 			} else if diff < 0 {
-				if !a.Recovering() {
-					a.warnLog.Printf("warning deviation in data -> rawOutputs: %d, GetValue() in event: %d", a.rawOutputsmap, msg.GetValue())
-					if msg.GetValue() < 4 {
-						ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: msg.GetValue()})
-						a.outputsmap[id] += msg.GetValue()
-						a.allOutputsmap[id] += msg.GetValue()
-					}
+				a.warnLog.Printf("warning deviation in data (id: %d)-> rawOutputs: %d, GetValue() in event: %d", id, a.rawOutputsmap, msg.GetValue())
+				if msg.GetValue() < 4 {
+					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: msg.GetValue()})
+					a.outputsmap[id] += msg.GetValue()
+					a.allOutputsmap[id] += msg.GetValue()
 				}
 			} else {
-				a.warnLog.Printf("counting diff outputs > 10, diff count: %v", diff)
+				a.warnLog.Printf("counting (id: %d) diff outputs > 10, diff count: %v", id, diff)
 			}
 			a.rawOutputsmap[id] = msg.GetValue()
 		case messages.TAMPERING:
@@ -312,6 +339,9 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 	case *msgEvent:
 		a.buildLog.Printf("data: %q", msg)
 		Publish(topicEvents, msg.data)
+	case *msgAddEvent:
+		a.buildLog.Printf("data: %q", msg)
+		Publish(topicAddEvents, msg.data)
 	case *actor.Terminated:
 		a.warnLog.Printf("actor terminated: %s", msg.GetWho().GetAddress())
 	}

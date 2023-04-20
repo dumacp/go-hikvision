@@ -17,6 +17,7 @@ const (
 	clientID       = "camera"
 	TopicAppliance = "appliance/camera"
 	topicEvents    = "EVENTS/backcounter"
+	topicAddEvents = "EVENTS/counterevents"
 	//topicCounter          = "COUNTERBACKDOOR"
 	topicCounter          = "COUNTERSMAPDOOR"
 	TopicStart            = TopicAppliance + "/START"

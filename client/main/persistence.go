@@ -20,6 +20,7 @@ var parseEvent = func(src []byte) proto.Message {
 		log.Println(err)
 		return nil
 	}
+	log.Printf("recovery MESSAGE: %v", i)
 	return i
 }
 
@@ -49,7 +50,7 @@ func newProvider(pathdb string, snapshotInterval int) (*provider, error) {
 	}, nil
 }
 
-//GetState implementation for actor persistence
+// GetState implementation for actor persistence
 func (p *provider) GetState() persistence.ProviderState {
 	return p.providerState
 }

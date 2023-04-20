@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.24_test2"
+	showVersion = "1.0.25_test"
 )
 
 var debug bool
@@ -26,8 +26,8 @@ var pathdb string
 var version bool
 var logXML bool
 
-var isZeroOpenState bool
-var enableCountWithCloseDoor bool
+var isZeroOpenState zeroFlags
+var enableCountWithCloseDoor closeFlags
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
@@ -36,8 +36,8 @@ func init() {
 	flag.StringVar(&pathdb, "pathdb", "/SD/boltdbs/countingdb", "socket to listen events")
 	flag.BoolVar(&version, "version", false, "show version")
 	flag.BoolVar(&logXML, "logxml", false, "logging XML in file")
-	flag.BoolVar(&isZeroOpenState, "zeroOpenState", false, "Is Zero the open state?")
-	flag.BoolVar(&enableCountWithCloseDoor, "countWithCloseDoor", false, "enable count with close door?")
+	flag.Var(&isZeroOpenState, "zeroOpenState", "Is Zero the open state?")
+	flag.Var(&enableCountWithCloseDoor, "countWithCloseDoor", "enable count with close door?")
 }
 
 func main() {
@@ -59,9 +59,23 @@ func main() {
 
 	rootContext := actor.NewActorSystem().Root
 
+	if len(isZeroOpenState) <= 0 {
+		isZeroOpenState = []bool{false}
+	}
+	if len(enableCountWithCloseDoor) <= 0 {
+		enableCountWithCloseDoor = []bool{false}
+	}
+
+	fmt.Printf("zeroOpenState: %v\n", isZeroOpenState)
+	fmt.Printf("countWithCloseDoor: %v\n", enableCountWithCloseDoor)
+
 	counting := client.NewCountingActor()
-	counting.SetZeroOpenState(isZeroOpenState)
-	counting.SetCountCloseDoor(enableCountWithCloseDoor)
+	for i, v := range isZeroOpenState {
+		counting.SetZeroOpenState(i, v)
+	}
+	for i, v := range enableCountWithCloseDoor {
+		counting.SetCountCloseDoor(i, v)
+	}
 	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).
 		SetLogBuild(buildlog)
 	if debug {

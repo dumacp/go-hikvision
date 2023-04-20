@@ -36,8 +36,8 @@ func parseGPSEvents(msg []byte) (interface{}, error) {
 
 // Receive func Receive in actor
 func (a *GPSActor) Receive(ctx actor.Context) {
-	logs.LogBuild.Printf("Message arrived in gpsActor: %T, %s",
-		ctx.Message(), ctx.Sender())
+	// logs.LogBuild.Printf("Message arrived in gpsActor: %T, %s",
+	// 	ctx.Message(), ctx.Sender())
 	// logs.LogBuild.Printf("Message arrived in gpsActor: %s, %T, %s",
 	// 	ctx.Message(), ctx.Message(), ctx.Sender())
 

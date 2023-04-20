@@ -42,10 +42,10 @@ func newLog(logStd bool, prefix string, flags int, priority int) *log.Logger {
 }
 
 func initLogs(debug, logStd, logXml bool) {
-	warnlog = newLog(logStd, "[ warn ] ", log.LstdFlags, 4)
-	infolog = newLog(logStd, "[ info ] ", log.LstdFlags, 6)
-	buildlog = newLog(logStd, "[ build ] ", log.LstdFlags, 7)
-	errlog = newLog(logStd, "[ error ] ", log.LstdFlags, 3)
+	warnlog = newLog(logStd, "[ warn ] ", 0, 4)
+	infolog = newLog(logStd, "[ info ] ", 0, 6)
+	buildlog = newLog(logStd, "[ build ] ", 0, 7)
+	errlog = newLog(logStd, "[ error ] ", 0, 3)
 	if logXml {
 		cameralog, _ = newLogFile("/SD/logs/", "camera")
 	}
