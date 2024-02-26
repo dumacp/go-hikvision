@@ -247,6 +247,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				a.rawInputsmap[id] = msg.GetValue()
 				break
 			}
+			a.PersistReceive(msg)
 			if diff > 0 && diff < 10 {
 				v, ok := a.puertas[uint(id)]
 				//TODO: default state is 1
@@ -260,7 +261,6 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				} else {
 					a.inputsmap[id] += diff
 					a.rawInputsmap[id] = msg.GetValue()
-					a.PersistReceive(msg)
 					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: diff})
 				}
 				a.allInputsmap[id] += diff
@@ -283,6 +283,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				a.rawOutputsmap[id] = msg.GetValue()
 				break
 			}
+			a.PersistReceive(msg)
 			if diff > 0 && diff < 10 {
 				//TODO: back door allways!
 				v, ok := a.puertas[uint(id)]
@@ -297,7 +298,6 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				} else {
 					a.outputsmap[id] += diff
 					a.rawOutputsmap[id] = msg.GetValue()
-					a.PersistReceive(msg)
 					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: diff})
 				}
 				a.allOutputsmap[id] += diff

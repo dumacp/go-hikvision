@@ -57,7 +57,9 @@ func getInstance(ctx *actor.RootContext) *pubsubActor {
 			ctx = actor.NewActorSystem().Root
 		}
 		props := actor.PropsFromFunc(instance.Receive)
-		_, err := ctx.SpawnNamed(props, "pubsub-actor")
+		buff := make([]byte, 4)
+		rand.Read(buff)
+		_, err := ctx.SpawnNamed(props, fmt.Sprintf("pubsub-actor-%X", buff))
 		if err != nil {
 			logs.LogError.Panic(err)
 		}

@@ -16,7 +16,7 @@ require (
 	github.com/dumacp/pubsub v0.0.0-20200115200904-f16f29d84ee0
 	github.com/eclipse/paho.mqtt.golang v1.4.2
 	github.com/gogo/protobuf v1.3.2
-	github.com/golang/protobuf v1.5.2
+	github.com/golang/protobuf v1.5.3
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07 // indirect
 	golang.org/x/exp/errors v0.0.0-20210916165020-5cb4fee858ee
 )
