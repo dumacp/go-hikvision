@@ -3,10 +3,11 @@ package main
 import (
 	"log"
 
-	"github.com/AsynkronIT/protoactor-go/persistence"
+	"github.com/asynkron/protoactor-go/persistence"
 	pdb "github.com/dumacp/go-actors/persistence"
 	"github.com/dumacp/go-hikvision/client/messages"
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
+	// "github.com/golang/protobuf/proto"
 )
 
 type provider struct {

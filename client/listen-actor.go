@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AsynkronIT/protoactor-go/actor"
+	"github.com/asynkron/protoactor-go/actor"
 	"github.com/dumacp/go-hikvision/client/messages"
 	"github.com/dumacp/go-hikvision/peoplecounting"
 )
@@ -114,20 +114,20 @@ func (act *ListenActor) runListen(ctx context.Context) {
 			}
 			enters := event.PeopleCounting.Enter
 			if diff := enters - act.entersBefore[id]; diff > 0 {
-				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.INPUT, Value: enters})
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.Event_INPUT, Value: enters})
 			}
 			act.entersBefore[id] = enters
 			exits := event.PeopleCounting.Exit
 			if diff := exits - act.exitsBefore[id]; diff > 0 {
-				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.OUTPUT, Value: exits})
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.Event_OUTPUT, Value: exits})
 			}
 			act.exitsBefore[id] = exits
 		case *peoplecounting.EventNotificationAlert:
 			switch event.EventType {
 			case peoplecounting.ScenechangedetectionType:
-				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.TAMPERING, Value: 0})
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.Event_TAMPERING, Value: 0})
 			case peoplecounting.ShelteralarmType:
-				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.TAMPERING, Value: 0})
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.Event_TAMPERING, Value: 0})
 			}
 		}
 	}

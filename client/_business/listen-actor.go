@@ -3,7 +3,7 @@ package business
 import (
 	"time"
 
-	"github.com/AsynkronIT/protoactor-go/actor"
+	"github.com/asynkron/protoactor-go/actor"
 	"github.com/dumacp/go-hikvision/client/messages"
 	"github.com/dumacp/go-hikvision/peoplecounting"
 )
@@ -48,6 +48,7 @@ func (act *ListenActor) Receive(ctx actor.Context) {
 	case *messages.CountingActor:
 		act.countingActor = actor.NewPID(msg.Address, msg.ID)
 	case *msgListenError:
+		time.Sleep(3 * time.Second)
 		act.errLog.Panicln("listen error")
 	}
 }

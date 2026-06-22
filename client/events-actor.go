@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/AsynkronIT/protoactor-go/actor"
+	"github.com/asynkron/protoactor-go/actor"
 	"github.com/dumacp/go-hikvision/client/messages"
 	"github.com/dumacp/pubsub"
 )
@@ -53,14 +53,14 @@ func (act *EventActor) Receive(ctx actor.Context) {
 		}
 		var event []byte
 		switch msg.Type {
-		case messages.INPUT:
+		case messages.Event_INPUT:
 
 			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger)
 			ctx.Send(ctx.Parent(), &msgEvent{data: event})
-		case messages.OUTPUT:
+		case messages.Event_OUTPUT:
 			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger)
 			ctx.Send(ctx.Parent(), &msgEvent{data: event})
-		case messages.TAMPERING:
+		case messages.Event_TAMPERING:
 			event = buildEventTampering(ctx, msg, frame, act.puertas, act.Logger)
 			ctx.Send(ctx.Parent(), &msgAddEvent{data: event})
 		}
@@ -78,9 +78,9 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 
 	// log.buildLog.Printf("memorys, %v, %v", mem1, mem2)
 	contadores := []int64{0, 0}
-	if v.Type == messages.INPUT {
+	if v.Type == messages.Event_INPUT {
 		contadores[0] = v.Value
-	} else if v.Type == messages.OUTPUT {
+	} else if v.Type == messages.Event_OUTPUT {
 		contadores[1] = v.Value
 	}
 	frame := gps
@@ -101,11 +101,13 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 		ID       int     `json:"id"`
 		State    uint    `json:"state"`
 		Counters []int64 `json:"counters"`
+		Type     string  `json:"type,omitempty"`
 	}{
 		frame,
 		int(v.ID),
 		doorState,
 		contadores[0:2],
+		"CAMERA",
 	}
 	message.Value = val
 
@@ -121,7 +123,7 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 func buildEventTampering(ctx actor.Context, v *messages.Event, gps string, puerta map[uint]uint, log *Logger) []byte {
 	// tn := time.Now()
 
-	if v.Type != messages.TAMPERING {
+	if v.Type != messages.Event_TAMPERING {
 		return nil
 	}
 	frame := gps
@@ -142,11 +144,13 @@ func buildEventTampering(ctx actor.Context, v *messages.Event, gps string, puert
 		ID       int     `json:"id"`
 		State    uint    `json:"state"`
 		Counters []int64 `json:"counters"`
+		Type     string  `json:"type,omitempty"`
 	}{
 		frame,
 		int(id),
 		doorState,
 		[]int64{0, 0},
+		"CAMERA",
 	}
 
 	if id == 0 {

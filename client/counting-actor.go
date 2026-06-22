@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/AsynkronIT/protoactor-go/actor"
-	"github.com/AsynkronIT/protoactor-go/persistence"
+	"github.com/asynkron/protoactor-go/actor"
+	"github.com/asynkron/protoactor-go/persistence"
 	"github.com/dumacp/go-hikvision/client/messages"
 	"github.com/dumacp/go-logs/pkg/logs"
 	"github.com/dumacp/pubsub"
@@ -98,6 +98,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		props2 := actor.PropsFromProducer(func() actor.Actor { return events })
 		pid2, err := ctx.SpawnNamed(props2, "events")
 		if err != nil {
+			time.Sleep(3 * time.Second)
 			a.errLog.Panicln(err)
 		}
 		a.events = pid2
@@ -105,6 +106,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		props3 := actor.PropsFromProducer(func() actor.Actor { return NewDoorsActor() })
 		pid3, err := ctx.SpawnNamed(props3, "doors")
 		if err != nil {
+			time.Sleep(3 * time.Second)
 			a.errLog.Panicln(err)
 		}
 		a.doors = pid3
@@ -112,6 +114,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		props4 := actor.PropsFromProducer(func() actor.Actor { return &PingActor{} })
 		pid4, err := ctx.SpawnNamed(props4, "ping")
 		if err != nil {
+			time.Sleep(3 * time.Second)
 			a.errLog.Panicln(err)
 		}
 		a.ping = pid4
@@ -119,6 +122,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		props5 := actor.PropsFromProducer(func() actor.Actor { return NewGPSActor() })
 		pid5, err := ctx.SpawnNamed(props5, "gps")
 		if err != nil {
+			time.Sleep(3 * time.Second)
 			a.errLog.Panicln(err)
 		}
 		a.gps = pid5
@@ -239,7 +243,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				scenario, a.inputsmap, a.outputsmap, msg)
 		}
 		switch msg.GetType() {
-		case messages.INPUT:
+		case messages.Event_INPUT:
 			diff := msg.GetValue() - a.rawInputsmap[id]
 			if a.Recovering() {
 				a.inputsmap[id] += diff
@@ -261,13 +265,13 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				} else {
 					a.inputsmap[id] += diff
 					a.rawInputsmap[id] = msg.GetValue()
-					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: diff})
+					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: diff})
 				}
 				a.allInputsmap[id] += diff
 			} else if diff < 0 {
 				a.warnLog.Printf("warning deviation in data (id: %d) -> rawInputs: %d, GetValue() in event: %d", id, a.rawInputsmap, msg.GetValue())
 				if msg.GetValue() < 4 {
-					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.INPUT, Value: msg.GetValue()})
+					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: msg.GetValue()})
 					a.inputsmap[id] += msg.GetValue()
 					a.allInputsmap[id] += msg.GetValue()
 				}
@@ -275,7 +279,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				a.warnLog.Printf("counting (id: %d) diff inputs > 10, diff count: %v", id, diff)
 			}
 			a.rawInputsmap[id] = msg.GetValue()
-		case messages.OUTPUT:
+		case messages.Event_OUTPUT:
 			diff := msg.GetValue() - a.rawOutputsmap[id]
 			if a.Recovering() {
 				a.outputsmap[id] += diff
@@ -298,13 +302,13 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				} else {
 					a.outputsmap[id] += diff
 					a.rawOutputsmap[id] = msg.GetValue()
-					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: diff})
+					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: diff})
 				}
 				a.allOutputsmap[id] += diff
 			} else if diff < 0 {
 				a.warnLog.Printf("warning deviation in data (id: %d)-> rawOutputs: %d, GetValue() in event: %d", id, a.rawOutputsmap, msg.GetValue())
 				if msg.GetValue() < 4 {
-					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.OUTPUT, Value: msg.GetValue()})
+					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: msg.GetValue()})
 					a.outputsmap[id] += msg.GetValue()
 					a.allOutputsmap[id] += msg.GetValue()
 				}
@@ -312,7 +316,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				a.warnLog.Printf("counting (id: %d) diff outputs > 10, diff count: %v", id, diff)
 			}
 			a.rawOutputsmap[id] = msg.GetValue()
-		case messages.TAMPERING:
+		case messages.Event_TAMPERING:
 			a.tamperingmap[id] += 1
 			a.warnLog.Println("tampering")
 			ctx.Send(a.events, msg)
@@ -320,11 +324,28 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 
 	case *msgPingError:
 		a.warnLog.Printf("camera keep alive error")
+		frame := ""
+		res, err := ctx.RequestFuture(ctx.Parent(), &MsgGetGps{}, 180*time.Millisecond).Result()
+		if err == nil {
+			if datagps, ok := res.(*MsgGPS); ok {
+				frame = string(datagps.Data)
+			}
+		}
+		val := struct {
+			Coord string `json:"coord"`
+			ID    int32  `json:"id"`
+			Type  string `json:"type,omitempty"`
+		}{
+			frame,
+			int32(0),
+			"CAMARA",
+		}
 		message := &pubsub.Message{
 			Timestamp: float64(time.Now().UnixNano()) / 1000000000,
 			Type:      "CounterDisconnected",
-			Value:     1,
+			Value:     val,
 		}
+
 		data, err := json.Marshal(message)
 		if err != nil {
 			break

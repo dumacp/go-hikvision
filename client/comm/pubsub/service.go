@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/AsynkronIT/protoactor-go/actor"
+	"github.com/asynkron/protoactor-go/actor"
 	"github.com/dumacp/go-hikvision/client/service"
 	"github.com/dumacp/go-hikvision/client/service/messages"
 	mqtt "github.com/eclipse/paho.mqtt.golang"

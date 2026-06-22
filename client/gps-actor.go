@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AsynkronIT/protoactor-go/actor"
+	"github.com/asynkron/protoactor-go/actor"
 	"github.com/dumacp/go-logs/pkg/logs"
 	"github.com/dumacp/gpsnmea"
 )

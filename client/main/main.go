@@ -8,15 +8,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AsynkronIT/protoactor-go/actor"
-	"github.com/AsynkronIT/protoactor-go/persistence"
+	"github.com/asynkron/protoactor-go/actor"
+	"github.com/asynkron/protoactor-go/persistence"
 	"github.com/dumacp/go-hikvision/client"
 	"github.com/dumacp/go-hikvision/client/messages"
 	"golang.org/x/exp/errors/fmt"
 )
 
 const (
-	showVersion = "1.0.27"
+	showVersion = "1.0.29"
 )
 
 var debug bool
@@ -82,9 +82,10 @@ func main() {
 		counting.WithDebug()
 	}
 
-	propsCounting := actor.PropsFromProducer(func() actor.Actor { return counting }).WithReceiverMiddleware(persistence.Using(provider))
+	propsCounting := actor.PropsFromProducer(func() actor.Actor { return counting }, actor.WithReceiverMiddleware(persistence.Using(provider)))
 	pidCounting, err := rootContext.SpawnNamed(propsCounting, "counting")
 	if err != nil {
+		time.Sleep(3 * time.Second)
 		errlog.Panicln(err)
 	}
 
@@ -99,6 +100,7 @@ func main() {
 	propsListen := actor.PropsFromFunc(listenner.Receive)
 	pidListen, err := rootContext.SpawnNamed(propsListen, "listenner")
 	if err != nil {
+		time.Sleep(3 * time.Second)
 		errlog.Panicln(err)
 	}
 
