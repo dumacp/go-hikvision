@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.29"
+	showVersion = "1.0.30"
 )
 
 var debug bool
@@ -26,8 +26,11 @@ var pathdb string
 var version bool
 var logXML bool
 
+var encryptCreds bool
+
 var isZeroOpenState zeroFlags
 var enableCountWithCloseDoor closeFlags
+var cameras cameraFlags
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
@@ -36,8 +39,11 @@ func init() {
 	flag.StringVar(&pathdb, "pathdb", "/SD/boltdbs/countingdb", "socket to listen events")
 	flag.BoolVar(&version, "version", false, "show version")
 	flag.BoolVar(&logXML, "logxml", false, "logging XML in file")
+	flag.BoolVar(&encryptCreds, "encryptCredentials", false,
+		"read user and password from stdin (one per line) and print the "+envCredentials+" value")
 	flag.Var(&isZeroOpenState, "zeroOpenState", "Is Zero the open state?")
 	flag.Var(&enableCountWithCloseDoor, "countWithCloseDoor", "enable count with close door?")
+	flag.Var(&cameras, "camera", "camera IP of a door; the n-th occurrence is door n-1")
 }
 
 func main() {
@@ -48,7 +54,24 @@ func main() {
 		fmt.Printf("version: %s\n", showVersion)
 		os.Exit(2)
 	}
+
+	if encryptCreds {
+		os.Exit(printEncryptedCredentials())
+	}
+
 	initLogs(debug, logStd, logXML)
+
+	// Credentials are only needed to talk to the camera, so a missing or unreadable
+	// value must not stop the counting: warn and keep going.
+	camUser, _, err := credentialsFromEnv()
+	switch {
+	case err != nil:
+		warnlog.Printf("%s: %s", envCredentials, err)
+	case len(camUser) == 0:
+		infolog.Printf("%s not set, camera dialogue disabled", envCredentials)
+	default:
+		infolog.Printf("camera credentials loaded for user %q", camUser)
+	}
 
 	// peoplecounting.Listen(socket, errlog)
 
@@ -68,6 +91,12 @@ func main() {
 
 	fmt.Printf("zeroOpenState: %v\n", isZeroOpenState)
 	fmt.Printf("countWithCloseDoor: %v\n", enableCountWithCloseDoor)
+	if len(cameras) > 0 {
+		fmt.Printf("cameras (index = door id): %v\n", cameras)
+	} else {
+		fmt.Printf("cameras: not configured, using the legacy rule (%s -> door 1, rest -> door 0)\n",
+			client.LegacyBackDoorIP())
+	}
 
 	counting := client.NewCountingActor()
 	for i, v := range isZeroOpenState {
@@ -90,6 +119,7 @@ func main() {
 	}
 
 	listenner := client.NewListen(socket, pidCounting)
+	listenner.SetCameras(cameras)
 	listenner.SetLogError(errlog).SetLogWarn(warnlog).
 		SetLogInfo(infolog).SetLogBuild(buildlog).SetLogCamera(cameralog)
 

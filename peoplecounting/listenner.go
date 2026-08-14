@@ -17,7 +17,7 @@ type Event struct {
 }
 
 // Listen function to listen events
-func Listen(ctx context.Context, socket string, wError, wCamera *log.Logger) <-chan *Event {
+func Listen(ctx context.Context, socket string, wError, wWarn, wCamera *log.Logger) <-chan *Event {
 	// wError.Println("listennnnn")
 
 	ch := make(chan *Event)
@@ -39,7 +39,11 @@ func Listen(ctx context.Context, socket string, wError, wCamera *log.Logger) <-c
 			// }
 			// log.Printf("headers: %v", req.Header)
 			ctype := req.Header.Get("Content-Type")
-			if ok := strings.Contains(ctype, "application/xml"); ok {
+			// The camera posts "application/xml; charset=UTF-8", but ISAPI documents
+			// "text/xml" as well for this listening mode, so match any XML media type
+			// instead of a single spelling. A multipart body (camera configured to
+			// attach a picture) does not match and is reported by the else branch.
+			if ok := strings.Contains(ctype, "xml"); ok {
 				// if err := req.ParseForm(); err != nil {
 				// 	log.Println(err)
 				// }
@@ -89,6 +93,11 @@ func Listen(ctx context.Context, socket string, wError, wCamera *log.Logger) <-c
 				case <-time.After(3 * time.Second):
 				case <-ctx.Done():
 				}
+			} else {
+				// The 200 OK below is answered even when the body is dropped, so
+				// without this log a wrong Content-Type looks healthy from both ends.
+				wWarn.Printf("discarded POST body from %s, unsupported Content-Type %q",
+					req.RemoteAddr, ctype)
 			}
 		}
 		w.WriteHeader(http.StatusOK)

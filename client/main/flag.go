@@ -20,6 +20,19 @@ func (i *zeroFlags) Set(value string) error {
 	return nil
 }
 
+// cameraFlags collects the -camera occurrences: the n-th one configures the camera of
+// door n-1, the same positional convention as -zeroOpenState and -countWithCloseDoor.
+type cameraFlags []string
+
+func (i *cameraFlags) String() string {
+	return fmt.Sprintf("%v", *i)
+}
+
+func (i *cameraFlags) Set(value string) error {
+	*i = append(*i, strings.TrimSpace(value))
+	return nil
+}
+
 type closeFlags []bool
 
 func (i *closeFlags) String() string {

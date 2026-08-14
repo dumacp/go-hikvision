@@ -12,6 +12,19 @@ import (
 	"github.com/dumacp/go-hikvision/peoplecounting"
 )
 
+// legacyBackDoorIP is the camera address that used to be hardcoded to identify the
+// back door. It is still the fallback when no -camera list is configured, so existing
+// deployments keep counting exactly as before.
+const legacyBackDoorIP = "192.168.188.21"
+
+// LegacyBackDoorIP exposes the fallback address for the startup banner.
+func LegacyBackDoorIP() string { return legacyBackDoorIP }
+
+// resyncThreshold tells a clock resynchronization from an out of order delivery. A
+// camera whose clock is corrected backwards (NTP, or a reboot with a default date)
+// must not have its events discarded until the clock catches up again.
+const resyncThreshold = 60 * time.Second
+
 // ListenActor actor to listen events
 type ListenActor struct {
 	*Logger
@@ -23,7 +36,38 @@ type ListenActor struct {
 
 	cancel func()
 
-	socket string
+	socket  string
+	cameras []string
+}
+
+// SetCameras configures the camera address of each door, where the index is the door
+// id. An empty list keeps the historical hardcoded behaviour.
+func (act *ListenActor) SetCameras(ips []string) *ListenActor {
+	act.cameras = ips
+	return act
+}
+
+// doorID maps the source address of an event to a door id.
+func (act *ListenActor) doorID(remoteIP string) int {
+	for id, ip := range act.cameras {
+		if len(ip) > 0 && strings.Contains(remoteIP, ip) {
+			return id
+		}
+	}
+	if len(act.cameras) > 0 {
+		// Counting it as door 0 keeps the passenger in the totals, which beats
+		// dropping the event, but the door breakdown is wrong: say so loudly.
+		act.warnLog.Printf("event from %q does not match any -camera %v, counted as door 0",
+			remoteIP, act.cameras)
+		return 0
+	}
+	if len(remoteIP) == 0 {
+		return 1
+	}
+	if strings.Contains(remoteIP, legacyBackDoorIP) {
+		return 1
+	}
+	return 0
 }
 
 // NewListen create listen actor
@@ -75,23 +119,25 @@ func parseDateTime(t1 string) (time.Time, error) {
 
 func (act *ListenActor) runListen(ctx context.Context) {
 	first := true
-	events := peoplecounting.Listen(ctx, act.socket, act.errLog, act.cameralog)
+	events := peoplecounting.Listen(ctx, act.socket, act.errLog, act.warnLog, act.cameralog)
 	for v := range events {
 		act.buildLog.Printf("listen event: %#v\n", v)
-		id := func() int {
-			if len(v.ID) == 0 {
-				return 1
-			}
-			if strings.Contains(v.ID, "192.168.188.21") {
-				return 1
-			}
-			return 0
-		}()
+		id := act.doorID(v.ID)
 		fmt.Printf("id: %v\n", id)
 		switch event := v.Data.(type) {
 		case *peoplecounting.EventNotificationAlertPeopleConting:
-			if strings.Contains(event.PeopleCounting.StatisticalMethods, "timeRange") {
-				act.warnLog.Printf("event timeRange, events -> %+v", event.PeopleCounting)
+			// Only "realTime" carries the camera's accumulated counters. Both
+			// "timeRange" and "signalTrigger" report the count of a time window
+			// instead (measured: enter=1 arrives while the accumulated value is 17),
+			// so feeding them to CountingActor yields a large negative delta, adds
+			// the window count when it is below 4 and leaves rawXmap at that small
+			// value, which then discards the next real event as a jump over 10.
+			// statisticalMethods is optional in ISAPI, so an empty value is taken as
+			// realTime rather than dropping every event from such a camera.
+			if m := event.PeopleCounting.StatisticalMethods; strings.Contains(m, "timeRange") ||
+				strings.Contains(m, "signalTrigger") {
+				act.warnLog.Printf("event %s (window count, not accumulated), events -> %+v",
+					m, event.PeopleCounting)
 				break
 			}
 			dateTime, err := parseDateTime(event.DateTime)
@@ -99,9 +145,19 @@ func (act *ListenActor) runListen(ctx context.Context) {
 				act.warnLog.Printf("time event error -> %s", err)
 				break
 			}
-			if dateTime.Before((act.timeBefore[id])) {
-				act.warnLog.Printf("time event error, events in the past -> new %v, before %v", dateTime, act.timeBefore[id])
-				break
+			// A small step back is an out of order delivery and is dropped. A large
+			// one is the camera clock being corrected (NTP sync, or a reboot with a
+			// default date): rejecting those would silently discard every event of
+			// that door until its clock passed the old mark again, which with a
+			// synchronizeInterval measured in hours means losing a whole shift.
+			if back := act.timeBefore[id].Sub(dateTime); back > 0 {
+				if back < resyncThreshold {
+					act.warnLog.Printf("time event error, events in the past -> new %v, before %v",
+						dateTime, act.timeBefore[id])
+					break
+				}
+				act.warnLog.Printf("camera (id: %d) clock stepped back %v, taking %v as the new reference",
+					id, back, dateTime)
 			}
 			act.timeBefore[id] = dateTime
 

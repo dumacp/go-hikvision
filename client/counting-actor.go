@@ -325,10 +325,17 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 	case *msgPingError:
 		a.warnLog.Printf("camera keep alive error")
 		frame := ""
-		res, err := ctx.RequestFuture(ctx.Parent(), &MsgGetGps{}, 180*time.Millisecond).Result()
-		if err == nil {
-			if datagps, ok := res.(*MsgGPS); ok {
-				frame = string(datagps.Data)
+		// Ask the GPS child directly. This used to request ctx.Parent(), which is nil
+		// because CountingActor is spawned on the root context, and requesting a nil
+		// PID panics: every keep alive failure restarted this actor, replaying the
+		// boltdb and republishing recomputed counters, while the CounterDisconnected
+		// event below was never reached.
+		if a.gps != nil {
+			res, err := ctx.RequestFuture(a.gps, &MsgGetGps{}, 180*time.Millisecond).Result()
+			if err == nil {
+				if datagps, ok := res.(*MsgGPS); ok {
+					frame = string(datagps.Data)
+				}
 			}
 		}
 		val := struct {
