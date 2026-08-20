@@ -341,9 +341,16 @@ servicio o hay que esperar la franja de mantenimiento:
 | `/ISAPI/ContentMgmt/record/tracks/101` | `statusCode 1`, activo al leerlo de vuelta | no, en caliente |
 | `/ISAPI/Streaming/channels/101` | **`statusCode 7`** `Reboot Required` | **sí**, inerte hasta reiniciar |
 
-El binario lo refleja: el perfil del encoder es lo último que revisa cada ciclo, y el reinicio va
-detrás de tres condiciones (ventana horaria configurada, estar dentro de ella, y no haber
-reiniciado ya esa cámara en esta corrida). Sin `-rebootStart`/`-rebootEnd` no reinicia nunca.
+El binario lo refleja: el perfil del encoder es lo último que revisa cada ciclo, y el PUT y el
+reinicio van en el **mismo** ciclo. No pueden separarse: un cambio que responde `7` queda guardado
+pero inerte y la cámara reporta el valor guardado, así que si el reinicio quedara para más tarde y
+el binario arrancara de nuevo en el medio, el ciclo siguiente no vería diferencia y nadie
+reiniciaría nunca.
+
+El único freno es un mínimo de tiempo encendido (`encoderMinUptime`, 30 min): el tope de "un
+reinicio por cámara" vive en memoria, y un binario en bucle de supervisión nunca llega a los 30
+minutos. Hubo antes una ventana horaria y se quitó — el gateway se apaga de noche con el vehículo,
+así que una franja de madrugada nunca se alcanzaba.
 
 Dos trampas del `<Video>` de este endpoint:
 

@@ -44,8 +44,6 @@ var recordEnd string
 var smartCodec string
 var videoFrameRate int
 var videoGop int
-var rebootStart string
-var rebootEnd string
 
 var isZeroOpenState zeroFlags
 var enableCountWithCloseDoor closeFlags
@@ -116,17 +114,6 @@ func init() {
 		"frames per second for the main stream; 0 leaves it as is (ISAPI stores centi-fps)")
 	flag.IntVar(&videoGop, "videoGop", 0,
 		"GOP length in frames; 0 leaves it as is. A shorter GOP means finer seeking")
-	// La ventana no es solo cuándo reiniciar: es cuándo se ESCRIBE el encoder. Un cambio que
-	// responde statusCode 7 queda guardado pero inerte, y la cámara reporta el valor guardado.
-	// Escribirlo fuera de la ventana y reiniciar el binario antes de que llegue dejaría a la
-	// cámara grabando con el ajuste viejo mientras el API dice lo contrario. Así que sin
-	// ventana no se escribe el encoder: solo se avisa qué falta.
-	flag.StringVar(&rebootStart, "rebootStart", "",
-		"start of the maintenance window where the encoder profile is written and the camera "+
-			"rebooted if needed; empty writes nothing and only warns")
-	flag.StringVar(&rebootEnd, "rebootEnd", "",
-		"end of the maintenance window; 00:30:00-03:30:00 sits inside the gap left by the "+
-			"default recording schedule")
 }
 
 func main() {
@@ -242,8 +229,6 @@ func main() {
 			SmartCodec:  smartCodec,
 			FrameRate:   videoFrameRate,
 			GopFrames:   videoGop,
-			RebootStart: rebootStart,
-			RebootEnd:   rebootEnd,
 		}, cameraCheckInterval)
 		cam.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 		if debug {
@@ -254,15 +239,11 @@ func main() {
 			ntpServer, ntpPort, ntpInterval, ntpTimeZone, ntpDriftMax, cameraCheckInterval,
 			recordStart, recordEnd)
 		// El perfil del encoder se anuncia aparte porque es el único que puede terminar en
-		// un reinicio, y conviene ver en el log de arranque si eso está habilitado o no.
+		// un reinicio de la cámara, y conviene verlo en el log de arranque.
 		if len(smartCodec) > 0 || videoFrameRate > 0 || videoGop > 0 {
-			ventana := "sin ventana de mantenimiento: NO escribe, solo avisa"
-			if len(rebootStart) > 0 && len(rebootEnd) > 0 {
-				ventana = fmt.Sprintf("escribe entre %s y %s y reinicia si hace falta",
-					rebootStart, rebootEnd)
-			}
-			infolog.Printf("encoder profile: smartCodec=%q fps=%d gop=%d (%s)",
-				smartCodec, videoFrameRate, videoGop, ventana)
+			infolog.Printf("encoder profile: smartCodec=%q fps=%d gop=%d; se aplica cuando el "+
+				"binario lleve un rato encendido, y reinicia la cámara si el cambio lo exige",
+				smartCodec, videoFrameRate, videoGop)
 		}
 	}
 

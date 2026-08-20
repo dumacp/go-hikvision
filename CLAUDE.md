@@ -328,8 +328,8 @@ Cinco reglas que explican el diseño:
   varios fallos, así que insistir cada ciclo con una credencial mala la deja inaccesible en
   campo. `isapi.ErrUnauthorized` es terminal por la misma razón.
 - **`statusCode 7` no es un error, es "aplicado, falta reiniciar".** El cliente `isapi` lo
-  reporta como error porque `OK()` solo acepta 0 y 1; el actor lo interpreta y decide según
-  la ventana de reinicio (abajo). Sin ventana configurada solo avisa, que es el default.
+  reporta como error porque `OK()` solo acepta 0 y 1; el actor lo interpreta como "aplicado,
+  falta reiniciar" y reinicia la cámara en el mismo ciclo (abajo).
 - **La referencia horaria es el GPS** cuando hay trama válida (`gpsnmea` da `TimeStamp` y
   `DateStamp` en UTC), corrigiendo por la mitad del RTT; si no, el reloj del gateway, y el log
   dice cuál usó. Se prefiere el GPS porque es independiente del reloj que se está auditando.
@@ -349,7 +349,7 @@ laboratorio venía con `07:55-16:02` y dejaba media jornada sin nada que extraer
 Y no conviene poner 24/7 sin pensarlo. Con 507 kbps medidos, una SD de 8 GB da **1.4 días de
 retención grabando todo el día contra 1.7 grabando veinte horas**. La palanca real de la
 retención es el tamaño de la tarjeta, no el horario; las cuatro horas que quedan libres
-compran poco disco y, en cambio, sirven de **ventana de mantenimiento** para el reinicio.
+compran poco disco.
 
 Dos precisiones del endpoint (`/ISAPI/ContentMgmt/record/tracks/101`):
 
@@ -371,7 +371,7 @@ extractor. Va al evento `CAMERATIME` como `storage` y `storage_free_mb`.
 ### Perfil de codificación y reinicio (`-smartCodec`)
 
 Flags, todos vacíos o en cero por defecto = **dejar la cámara como esté**: `-smartCodec`
-(`off`/`on`), `-videoFrameRate` (fps), `-videoGop` (cuadros), `-rebootStart`, `-rebootEnd`.
+(`off`/`on`), `-videoFrameRate` (fps), `-videoGop` (cuadros).
 
 **`-smartCodec off` es el que importa.** H.264+ con escena quieta graba un keyframe cada
 varios segundos y el clip parece congelado: medido, **49 frames con un hueco de 5.7 s** contra
@@ -381,34 +381,35 @@ varios segundos y el clip parece congelado: medido, **49 frames con un hueco de 
 `PUT /ISAPI/Streaming/channels/101`: `GovLength` y `maxFrameRate` responden `statusCode 1` y se
 aplican en caliente; `SmartCodec` responde `statusCode 7` y queda inerte hasta el reinicio.
 
-Cinco decisiones que no son negociables sin volver a medir:
+Cuando hace falta, **la cámara se reinicia sola**. No hay ventana horaria y no hay flag para
+habilitarlo: si pediste `-smartCodec off`, se aplica. Cinco cosas que explican el diseño:
 
-- **La ventana no es "cuándo reiniciar", es "cuándo escribir".** Sin
-  `-rebootStart`/`-rebootEnd` el encoder **no se escribe en absoluto**: solo se avisa qué
-  falta aplicar. Un cambio que responde `7` queda **guardado pero inerte, y la cámara reporta
-  el valor guardado, no el efectivo**. Si se escribiera fuera de la ventana y el binario
-  reiniciara antes de que llegue —supervisión, despliegue—, el ciclo siguiente leería el valor
-  nuevo, no vería diferencia, y nadie reiniciaría nunca: la cámara seguiría grabando con el
-  ajuste viejo mientras la configuración y la lectura del API coinciden en decir lo contrario.
-  Escribiendo dentro de la ventana, el PUT y el reinicio pasan en el mismo ciclo.
-- **`considerReboot` NO vuelve a comprobar la ventana.** Volver a comprobarla podría dejar el
-  cambio ya escrito pero sin reiniciar, que es exactamente el estado que se está evitando.
-- **El reinicio cuesta.** Corta unos 70 segundos de grabación —pedir un instante del hueco
-  devuelve `500`— y durante el arranque la cámara no envía eventos, así que los pasajeros que
-  cruzan ahí no se cuentan. Medido: vuelve a responder en ~2 minutos.
-  `00:30:00-03:30:00` cae dentro del hueco que deja el horario de grabación por defecto.
-- **Un reinicio por cámara por arranque del binario** (`camTimeState.rebooted`). Si un modelo
-  acepta el PUT pero no lo persiste, el ciclo siguiente ve la misma diferencia y volvería a
-  reiniciar: cada media hora, en toda la flota. Al segundo pedido el actor loguea ERROR y no
-  reinicia — un reinicio que no arregla nada es algo para mirar en el log.
+- **El PUT y el reinicio van en el mismo ciclo, segundos aparte.** Un cambio que responde `7`
+  queda **guardado pero inerte, y la cámara reporta el valor guardado, no el efectivo**. Si el
+  reinicio quedara para después y el binario arrancara de nuevo en el medio —supervisión,
+  despliegue—, el ciclo siguiente leería el valor nuevo, no vería diferencia, y nadie
+  reiniciaría nunca: la cámara seguiría grabando con el ajuste viejo mientras la configuración
+  y la lectura del API coinciden en decir lo contrario.
+- **`considerReboot` no vuelve a comprobar ninguna precondición**, por lo mismo: hacerlo podría
+  dejar el cambio ya escrito pero sin reiniciar.
+- **El único freno es `encoderMinUptime` (30 min).** El tope de "un reinicio por cámara"
+  (`camTimeState.rebooted`) vive en memoria y se pierde al arrancar de nuevo, y este repo tiene
+  historia de bucles de supervisión —el bug de `ctx.Parent()` nulo produjo 7 arranques
+  seguidos—. Un binario en bucle nunca llega a los 30 minutos, así que nunca reinicia una
+  cámara. **Hubo antes una ventana horaria `-rebootStart`/`-rebootEnd` y se quitó**: el gateway
+  se alimenta del vehículo y de noche queda apagado, así que una franja de madrugada no la
+  alcanzaba ningún ciclo y el ajuste no se aplicaba nunca. Cambiaba una falla silenciosa por
+  otra.
+- **El reinicio cuesta y va a caer en horario de servicio.** Corta unos 70 segundos de
+  grabación —pedir un instante del hueco devuelve `500`— y durante el arranque la cámara no
+  envía eventos, así que los pasajeros que cruzan ahí no se cuentan. Medido: vuelve a responder
+  en ~2 minutos. Es aceptable porque ocurre **una vez por cámara**: en estado estable el perfil
+  coincide y no se escribe nada. Si aparece seguido, algo no está persistiendo y hay que mirar
+  el log.
 - **`videoCodecType` se reporta pero NUNCA se escribe.** `video/extract.go` solo maneja H.264;
   poner H.265 desde acá rompería la extracción en silencio. El actor deja WARN y el codec
   observado viaja en el evento (`video_codec`, `video_fps`, `smart_codec`) para que la
   plataforma detecte de lejos una cámara mal configurada.
-
-La ventana es **exclusiva en el fin** y soporta cruce de medianoche (`22:00-04:00`): si fuera
-inclusiva, una ventana que termina donde arranca la grabación permitiría reiniciar en el primer
-segundo de servicio.
 
 El reinicio **se decide en el hilo del actor y se ejecuta en goroutine**: `considerReboot` marca
 `rebooted` antes de lanzar el PUT, así el candado se cierra sin carrera, y `msgRebootDone` trae
@@ -419,9 +420,8 @@ Lo que el reinicio **no** rompe: `ListenActor` es un servidor HTTP pasivo, así 
 vuelve a postear sus eventos sola cuando termina de arrancar. No hay nada que reconectar.
 
 Verificado de punta a punta contra el DS-2XM6825G0: perfil ya alineado → no escribe; `GovLength`
-distinto → `statusCode 1`, en caliente, sin reinicio; `SmartCodec` distinto dentro de la ventana
-→ `statusCode 7`, reinicio, cámara de vuelta en 2 min con el ajuste efectivo, y el ciclo
-siguiente idempotente.
+distinto → `statusCode 1`, en caliente, sin reinicio; `SmartCodec` distinto → `statusCode 7`,
+reinicio, cámara de vuelta en 2 min con el ajuste efectivo, y el ciclo siguiente idempotente.
 
 ### Credenciales de cámara
 

@@ -25,6 +25,19 @@ const (
 	// alarmar. Con uno solo, un pico de latencia o una corrección en curso generaría
 	// falsas alarmas.
 	cameraDriftCycles = 3
+	// encoderMinUptime es lo que el binario tiene que llevar encendido antes de tocar el
+	// perfil de codificación.
+	//
+	// Es el único freno que tiene el reinicio de cámara, y reemplaza a la ventana horaria
+	// que había antes. La ventana no servía: el gateway se alimenta del vehículo y de noche
+	// queda apagado, así que una franja de madrugada nunca la alcanzaba ningún ciclo y el
+	// ajuste quedaba sin aplicar para siempre.
+	//
+	// Lo que sí hay que acotar es el bucle: el tope de "un reinicio por cámara" vive en
+	// memoria y se pierde al reiniciar el binario, y este repo tiene historia de bucles de
+	// supervisión (el bug de ctx.Parent() nulo produjo 7 arranques seguidos). Un binario que
+	// se reinicia en bucle nunca llega a este mínimo, así que nunca reinicia una cámara.
+	encoderMinUptime = 30 * time.Minute
 )
 
 // CameraConfig es la configuración que se quiere en toda la flota de cámaras.
@@ -60,28 +73,11 @@ type CameraConfig struct {
 	// los fps en centi-fps, la conversión la hace el actor.
 	FrameRate int
 	GopFrames int
-
-	// RebootStart y RebootEnd son la ventana horaria del equipo en que se permite
-	// reiniciar una cámara, en HH:MM:SS. Vacías significan **no reiniciar nunca**: solo
-	// avisar, que es el comportamiento anterior.
-	//
-	// El perfil de codificación es el único cambio que la cámara aplica con statusCode 7,
-	// o sea "guardado, falta reiniciar". Y el reinicio no es gratis: corta unos 70 segundos
-	// de grabación —pedir un instante del hueco devuelve 500— y durante el arranque la
-	// cámara no envía eventos, así que los pasajeros que cruzan en esa ventana no se
-	// cuentan. Por eso se hace en la franja sin servicio, no cuando el ciclo lo descubre.
-	RebootStart string
-	RebootEnd   string
 }
 
 // wantsEncoder indica si hay algo que alinear en el perfil de codificación.
 func (c CameraConfig) wantsEncoder() bool {
 	return len(c.SmartCodec) > 0 || c.FrameRate > 0 || c.GopFrames > 0
-}
-
-// rebootAllowed indica si se configuró una ventana de reinicio.
-func (c CameraConfig) rebootAllowed() bool {
-	return len(c.RebootStart) > 0 && len(c.RebootEnd) > 0
 }
 
 // CameraActor mantiene la configuración de hora de las cámaras y avisa cuando una deriva.
@@ -101,6 +97,8 @@ type CameraActor struct {
 	state   map[int32]*camTimeState
 	working bool
 	cancel  func()
+	// startedAt fija el arranque, para el mínimo de encoderMinUptime.
+	startedAt time.Time
 }
 
 // camTimeState recuerda lo justo para no repetir logs ni alarmas en cada ciclo.
@@ -174,8 +172,8 @@ type msgCameraResult struct {
 	smartCodec   bool
 	// encoderErr se reporta aparte de err: un fallo acá no invalida lo demás del ciclo.
 	encoderErr error
-	// encoderPending son las diferencias medidas y NO escritas, porque el ciclo cayó fuera
-	// de la ventana de reinicio (o no hay ventana). Sirven para avisar qué falta aplicar.
+	// encoderPending son las diferencias medidas y NO escritas todavía, porque el binario
+	// aún no llegó a encoderMinUptime. Sirven para avisar qué falta aplicar.
 	encoderPending []string
 }
 
@@ -201,6 +199,7 @@ func (a *CameraActor) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		a.initLogs()
+		a.startedAt = time.Now()
 		a.infoLog.Printf("actor started \"%s\": ntp=%s:%d cada %v, zona %q, deriva máxima %v, ciclo %v",
 			ctx.Self().Id, a.want.Server, a.want.Port, a.want.Interval,
 			a.want.TimeZone, a.want.DriftMax, a.interval)
@@ -277,18 +276,18 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 		time.Duration(len(trabajos))*4*cameraHTTPTimeout)
 	a.cancel = cancel
 
-	// El perfil de codificación se escribe SOLO dentro de la ventana de reinicio, y por eso
-	// se decide acá, en el hilo del actor, junto con el resto del ciclo.
+	// El perfil de codificación se decide acá, en el hilo del actor, y no en la goroutine.
 	//
-	// La razón no es prudencia sino corrección: un cambio que responde statusCode 7 queda
-	// **guardado pero inerte**, y la cámara reporta el valor guardado, no el efectivo. Si se
-	// escribiera fuera de la ventana y el binario reiniciara antes de que llegue —supervisión,
-	// despliegue—, el ciclo siguiente leería el valor nuevo, no vería diferencia, y nadie
-	// reiniciaría nunca: la cámara seguiría grabando con el ajuste viejo mientras la
-	// configuración y la lectura del API coinciden en decir lo contrario. Escribiendo dentro
-	// de la ventana, el PUT y el reinicio pasan en el mismo ciclo y no queda estado a medias.
-	escribirEncoder := a.want.wantsEncoder() && a.want.rebootAllowed() &&
-		withinWindow(time.Now(), a.want.RebootStart, a.want.RebootEnd)
+	// Se escribe siempre que haya algo que alinear, con una sola condición: que el binario
+	// lleve encendido al menos encoderMinUptime. El PUT y el reinicio quedan en el mismo
+	// ciclo, segundos aparte, porque un cambio que responde statusCode 7 queda **guardado
+	// pero inerte y la cámara reporta el valor guardado, no el efectivo**: si se escribiera
+	// ahora y el reinicio quedara para después, un arranque del binario en el medio haría que
+	// el ciclo siguiente no viera diferencia y nadie reiniciara nunca. La cámara seguiría
+	// grabando con el ajuste viejo mientras la configuración y el API coinciden en decir lo
+	// contrario.
+	escribirEncoder := a.want.wantsEncoder() &&
+		time.Since(a.startedAt) >= encoderMinUptime
 
 	a.buildLog.Printf("ciclo de hora sobre %d cámara(s), referencia %s (encoder: escribe=%v)",
 		len(trabajos), refFuente, escribirEncoder)
@@ -506,9 +505,7 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 // checkEncoder alinea el perfil de codificación del canal principal.
 //
 // Con escribir en falso solo mide la diferencia y la deja en res.encoderPending: es lo que
-// pasa fuera de la ventana de reinicio, y también cuando no hay ventana configurada. Ver
-// runCycle para el porqué —escribir fuera de la ventana puede dejar la cámara con un ajuste
-// guardado pero inerte y sin nadie que la reinicie.
+// pasa durante los primeros encoderMinUptime del binario.
 //
 // Un error acá NO aborta el ciclo: la hora, el NTP, el horario y el almacenamiento ya
 // quedaron revisados, y el perfil es lo menos urgente de los cinco. Se anota como
@@ -693,21 +690,13 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 				res.door, res.host, res.codecType)
 		}
 	}
-	// Lo que se midió pero no se escribió, porque el ciclo no cayó en la ventana. Se avisa
-	// una vez por cámara para no repetirlo cada media hora.
+	// Lo que se midió pero todavía no se escribió. Se avisa una vez por cámara para no
+	// repetirlo en cada ciclo.
 	if len(res.encoderPending) > 0 && !st.rebootWarned {
 		st.rebootWarned = true
-		if a.want.rebootAllowed() {
-			a.infoLog.Printf("cámara de la puerta %d (%s): %s pendiente(s), se aplican en la "+
-				"ventana %s-%s", res.door, res.host, strings.Join(res.encoderPending, ", "),
-				a.want.RebootStart, a.want.RebootEnd)
-		} else {
-			// Sin ventana no se escribe NADA: dejar el ajuste guardado pero inerte es peor
-			// que no tocarlo, porque la lectura del API diría que está aplicado.
-			a.warnLog.Printf("cámara de la puerta %d (%s): %s sin aplicar. Hace falta "+
-				"-rebootStart/-rebootEnd, porque el cambio puede exigir reiniciar la cámara",
-				res.door, res.host, strings.Join(res.encoderPending, ", "))
-		}
+		a.infoLog.Printf("cámara de la puerta %d (%s): %s pendiente(s), se aplican cuando el "+
+			"binario lleve %v encendido", res.door, res.host,
+			strings.Join(res.encoderPending, ", "), encoderMinUptime)
 	}
 	if len(res.encoderPending) == 0 {
 		st.rebootWarned = false
@@ -777,10 +766,9 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 
 // considerReboot reinicia la cámara que acaba de responder statusCode 7.
 //
-// Solo se llega acá desde un ciclo que ya escribió, y solo se escribe dentro de la ventana:
-// la ventana **no se vuelve a comprobar**. Volver a comprobarla podría dejar el cambio ya
-// escrito pero sin reiniciar —guardado e inerte, el peor estado— si el ciclo cruzara el borde
-// entre el PUT y esta decisión.
+// Solo se llega acá desde un ciclo que ya escribió y recibió statusCode 7, así que no se
+// vuelve a comprobar ninguna precondición: hacerlo podría dejar el cambio ya escrito pero sin
+// reiniciar, que es el peor estado —guardado e inerte, con el API reportando el valor nuevo.
 //
 // Corre en el hilo del actor, que es donde vive el estado, y por eso puede marcar `rebooted`
 // antes de lanzar la petición: el candado se cierra sin carrera. El PUT en sí va en una
@@ -809,29 +797,6 @@ func (a *CameraActor) considerReboot(ctx actor.Context, res *msgCameraResult, st
 		err := isapi.New(host, user, pass, cameraHTTPTimeout).Reboot(cctx)
 		system.Root.Send(self, &msgRebootDone{door: door, host: host, err: err})
 	}()
-}
-
-// withinWindow indica si t está en la franja [start, end) en hora local del equipo.
-// Soporta ventanas que cruzan la medianoche, como 22:00:00-04:00:00.
-func withinWindow(t time.Time, start, end string) bool {
-	ini, err1 := secondsOfDay(start)
-	fin, err2 := secondsOfDay(end)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	ahora := t.Hour()*3600 + t.Minute()*60 + t.Second()
-	if ini <= fin {
-		return ahora >= ini && ahora < fin
-	}
-	return ahora >= ini || ahora < fin
-}
-
-func secondsOfDay(v string) (int, error) {
-	t, err := time.Parse("15:04:05", v)
-	if err != nil {
-		return 0, err
-	}
-	return t.Hour()*3600 + t.Minute()*60 + t.Second(), nil
 }
 
 // publish avisa a la plataforma. Se publica solo en los cambios de estado: una línea por
