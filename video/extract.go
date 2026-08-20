@@ -61,6 +61,13 @@ type Result struct {
 	Duration time.Duration
 	Bytes    int64
 	Elapsed  time.Duration
+	// MaxGap es el intervalo más largo entre dos fotos consecutivas del clip.
+	//
+	// Es la medida de si el clip se ve fluido o congelado, y sirve para juzgarlo sin abrirlo.
+	// A 20 fps lo normal es 0.05 s. Con H.264+ (SmartCodec) y escena quieta la cámara deja
+	// de emitir fotos: medido, un hueco de 5.7 s en un clip de 10 segundos, que es
+	// exactamente el "no se vio bien el paso de la persona".
+	MaxGap time.Duration
 }
 
 // PlaybackURL arma la URL de reproducción por hora.
@@ -282,9 +289,20 @@ func writeMP4(dest string, samples []sample, sps, pps []byte) (*Result, error) {
 	}
 
 	span := samples[len(samples)-1].dts - samples[0].dts
+
+	// El hueco más grande entre fotos consecutivas. Se mide sobre dts y no sobre pts porque
+	// dts es el orden en que se decodifican, que es el que marca el avance del tiempo.
+	var maxGap int64
+	for i := 1; i < len(samples); i++ {
+		if d := samples[i].dts - samples[i-1].dts; d > maxGap {
+			maxGap = d
+		}
+	}
+
 	return &Result{
 		Samples:  len(samples),
 		Duration: time.Duration(span) * time.Second / timeScale,
 		Bytes:    size,
+		MaxGap:   time.Duration(maxGap) * time.Second / timeScale,
 	}, nil
 }

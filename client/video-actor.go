@@ -29,6 +29,11 @@ const (
 	// cruce entre completo en el clip. Es lo que limita cuántos eventos seguidos
 	// pueden compartir una misma ventana.
 	videoMinPostRoll = 2 * time.Second
+	// videoMaxGapWarn es el hueco entre fotos a partir del cual se avisa que el clip se va a
+	// ver congelado. A 20 fps lo normal es 0.05 s, y el caso malo medido con H.264+ fue de
+	// 5.7 s, así que un segundo queda holgado respecto del jitter normal y muy por debajo del
+	// problema real.
+	videoMaxGapWarn = 1 * time.Second
 	// videoMinFree es el espacio libre mínimo bajo el cual se deja de extraer. El
 	// binario no borra clips —de eso se encarga quien los suba— pero tampoco puede
 	// llenar el disco, porque en la misma partición vive la boltdb del conteo.
@@ -181,9 +186,20 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 			a.errLog.Printf("extrayendo video de la puerta %d (%s, %d evento(s)): %s",
 				anchor.door, anchor.when.Format(time.RFC3339), len(msg.group), msg.err)
 		default:
-			a.infoLog.Printf("video %s: %d muestras, %v, %d bytes en %v, %d evento(s) en la ventana",
+			a.infoLog.Printf("video %s: %d muestras, %v, hueco máx %v, %d bytes en %v, %d evento(s) en la ventana",
 				filepath.Base(msg.dest), msg.res.Samples, msg.res.Duration.Round(time.Millisecond),
-				msg.res.Bytes, msg.res.Elapsed.Round(time.Millisecond), len(msg.group))
+				msg.res.MaxGap.Round(time.Millisecond), msg.res.Bytes,
+				msg.res.Elapsed.Round(time.Millisecond), len(msg.group))
+			// Un hueco grande significa que la cámara dejó de emitir fotos, y el clip se ve
+			// congelado por más que la extracción haya salido bien. La causa medida es
+			// H.264+ (SmartCodec) con escena quieta: 5.7 s sin una sola foto nueva. Se avisa
+			// acá porque sin este log se culparía al extractor.
+			if msg.res.MaxGap > videoMaxGapWarn {
+				a.warnLog.Printf("video %s: hueco de %v sin fotos (normal a 20 fps: 0.05s). "+
+					"El clip se va a ver congelado en ese tramo. Causa medida: H.264+ activo "+
+					"en la cámara; se apaga con -smartCodec off",
+					filepath.Base(msg.dest), msg.res.MaxGap.Round(time.Millisecond))
+			}
 			a.publishVideoReady(ctx, msg)
 		}
 		a.next(ctx)
@@ -459,6 +475,30 @@ type sidecar struct {
 	CamCounter   int64  `json:"camera_counter"`
 	Samples      int    `json:"samples"`
 	Bytes        int64  `json:"bytes"`
+	// MaxGapS es el hueco más largo entre dos fotos del clip, en segundos, y es la medida
+	// de si el clip se ve fluido o congelado. A 20 fps lo normal es 0.05.
+	//
+	// Existe para poder juzgar un clip **sin abrirlo**: con H.264+ (SmartCodec) activo y
+	// escena quieta la cámara deja de emitir fotos, y un clip de 10 segundos puede traer un
+	// hueco de 5.7 s. La plataforma puede detectar de lejos una cámara así comparando este
+	// campo contra `duration_s`.
+	MaxGapS float64 `json:"max_gap_s"`
+	// FPSEffective son las fotos por segundo que realmente trae el clip, que con H.264+ es
+	// bastante menor que los fps configurados en la cámara.
+	FPSEffective float64 `json:"fps_effective"`
+}
+
+// fpsEfectivo son las fotos por segundo que trae el clip. Devuelve 0 si no se puede medir,
+// en vez de un infinito que rompería el JSON.
+func fpsEfectivo(samples int, dur time.Duration) float64 {
+	if dur <= 0 || samples <= 1 {
+		return 0
+	}
+	return round2(float64(samples) / dur.Seconds())
+}
+
+func round2(f float64) float64 {
+	return float64(int(f*100+0.5)) / 100
 }
 
 func writeSidecar(path string, job videoJob, gateway, host string, ident camIdent, clip string, start time.Time, dur time.Duration, res *video.Result) error {
@@ -479,6 +519,8 @@ func writeSidecar(path string, job videoJob, gateway, host string, ident camIden
 		CamCounter:      job.counter,
 		Samples:         res.Samples,
 		Bytes:           res.Bytes,
+		MaxGapS:         round2(res.MaxGap.Seconds()),
+		FPSEffective:    fpsEfectivo(res.Samples, res.Duration),
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

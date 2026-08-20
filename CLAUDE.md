@@ -260,7 +260,9 @@ Es el contrato con el proceso que sube los archivos, que no vive en este repo:
   "camera_mac": "bc:9b:5e:e7:ef:05",
   "camera_counter": 1,
   "samples": 201,
-  "bytes": 1264740
+  "bytes": 1264740,
+  "max_gap_s": 0.08,
+  "fps_effective": 20.08
 }
 ```
 
@@ -277,6 +279,13 @@ Cuatro precisiones que evitan malinterpretarlo:
   extracción sigue**: el clip vale más que su metadato. Son la identidad estable del equipo,
   mientras `camera` es la IP y cambia con el direccionamiento.
 - **`camera_counter` es el incremento de este evento**, casi siempre `1`, no el acumulado.
+- **`max_gap_s` y `fps_effective` dicen si el clip se ve fluido o congelado, sin abrirlo.** A
+  20 fps lo normal es un hueco de 0.05 s. Medido en la misma cámara y la misma escena quieta:
+  con H.264+ apagado, **241 fotos en 12 s y hueco de 83 ms**; encendido, **2 fotos en 12 s y
+  hueco de 12.2 s** — el clip entero es un hueco, y pesa 8.4 veces menos (85 KB contra 718 KB).
+  El binario deja WARN cuando el hueco pasa de un segundo, porque sin ese aviso se culparía al
+  extractor. Ojo: esas cifras son con **escena quieta**; con una persona cruzando hay
+  movimiento y el codec debería emitir fotos, pero eso está **sin medir**.
 
 ### Correlación con la plataforma (`event_id`)
 

@@ -324,6 +324,14 @@ Resultado medido con `SmartCodec: false`, mismo código de extracción:
 | SmartCodec **on**, escena quieta | 49 | **5.667 s** | 195 kbps |
 | SmartCodec **off**, escena quieta | 161 en 8 s | 0.083 s | — |
 | SmartCodec **off**, con cruce | 201 en 10 s | 0.083 s | **507 kbps** |
+| SmartCodec **off**, escena quieta (remedido) | 241 en 12 s | 0.083 s | 718 KB / 12 s |
+| SmartCodec **on**, escena quieta (remedido) | **2 en 12 s** | **12.167 s** | 85 KB / 12 s |
+
+El remedido es peor que el primero: con escena quieta el clip entero es un hueco. **Falta la fila
+que decide**, SmartCodec `on` **con una persona cruzando**: ahí hay movimiento y el codec debería
+emitir fotos. Sin esa medición no se puede afirmar que H.264+ arruine el clip del cruce, solo que
+arruina el clip de una escena quieta. El binario ahora mide `max_gap_s` y `fps_effective` en cada
+sidecar, así que la prueba se lee sola.
 
 El precio es **x2.6 en bitrate**: 228 MB/hora, y la retención de una SD de 7695 MB baja de ~10 días
 a **4.2 días** con un horario de 8 h diarias (1.4 días si fuera 24/7). Sigue siendo cómodo para
