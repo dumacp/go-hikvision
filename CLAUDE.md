@@ -26,8 +26,11 @@ cd client/messages && ./protobuf.sh
 no sustituyas esos `replace` por versiones remotas sin acordarlo.
 
 **Versión**: la constante `showVersion` en [client/main/main.go](client/main/main.go#L19) es la
-única fuente de versión. Súbela en el mismo commit que el cambio funcional (el historial usa
-mensajes tipo `version 1.0.27`).
+única fuente de versión. **No la subas por tu cuenta.** Se sube cuando hay acuerdo de que lo que
+está en `master` es lo que se va a desplegar, y el número lo decide quien lo despliega — un commit
+que la sube por cada cambio produce versiones que nunca existieron como binario (en esta historia
+`1.0.35` es una sintaxis que se revirtió en `1.0.36`). Commiteá el cambio funcional y dejá la
+constante quieta.
 
 ## Arquitectura (protoactor-go)
 
@@ -532,6 +535,6 @@ cgo a un `.so` propietario más SDL, y este binario nunca toca video.
 ## Al terminar un cambio
 
 1. `go build ./... && go vet ./...`
-2. Subir `showVersion` si el binario cambia de comportamiento.
+2. **No toques `showVersion`**; se sube aparte, cuando hay acuerdo de desplegar.
 3. Si tocaste el contrato MQTT o el XML de la cámara, actualiza la skill correspondiente
    (`mqtt-contract`, `hikvision-isapi`) — son la documentación viva de esas fronteras.
