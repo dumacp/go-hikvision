@@ -1,6 +1,8 @@
 package client
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"time"
@@ -33,6 +35,46 @@ type CountingActor struct {
 	events *actor.PID
 	ping   *actor.PID
 	gps    *actor.PID
+	video  *actor.PID
+	camera *actor.PID
+
+	// videoProps y cameraProps quedan nil si esas funciones no se configuraron.
+	videoProps  *actor.Props
+	cameraProps *actor.Props
+}
+
+// SetCameraProps habilita el mantenimiento de hora y NTP de las cámaras.
+func (a *CountingActor) SetCameraProps(props *actor.Props) {
+	a.cameraProps = props
+}
+
+// newUID genera el identificador de un paso contado. Ocho hexadecimales alcanzan: la
+// unicidad real viene de la combinación de host, timestamp, puerta y tipo, y esto
+// resuelve el único caso ambiguo, dos pasos del mismo tipo en el mismo segundo.
+func newUID() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// sendCounted entrega un paso ya validado a los actores que lo consumen: el que arma
+// el JSON para MQTT y, si está habilitado, el que extrae el video. Les pasa el mismo
+// mensaje, así que ambos ven el mismo uid sin coordinación extra.
+func (a *CountingActor) sendCounted(ctx actor.Context, ev *messages.Event) {
+	if len(ev.Uid) == 0 {
+		ev.Uid = newUID()
+	}
+	ctx.Send(a.events, ev)
+	if a.video != nil {
+		ctx.Send(a.video, ev)
+	}
+}
+
+// SetVideoProps habilita la extracción de video con el actor descrito por props.
+func (a *CountingActor) SetVideoProps(props *actor.Props) {
+	a.videoProps = props
 }
 
 const (
@@ -126,6 +168,24 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			a.errLog.Panicln(err)
 		}
 		a.gps = pid5
+
+		if a.videoProps != nil {
+			pid6, err := ctx.SpawnNamed(a.videoProps, "video")
+			if err != nil {
+				time.Sleep(3 * time.Second)
+				a.errLog.Panicln(err)
+			}
+			a.video = pid6
+		}
+
+		if a.cameraProps != nil {
+			pid7, err := ctx.SpawnNamed(a.cameraProps, "camera")
+			if err != nil {
+				time.Sleep(3 * time.Second)
+				a.errLog.Panicln(err)
+			}
+			a.camera = pid7
+		}
 
 	case *persistence.RequestSnapshot:
 		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
@@ -265,13 +325,13 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				} else {
 					a.inputsmap[id] += diff
 					a.rawInputsmap[id] = msg.GetValue()
-					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: diff})
+					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: diff, Timestamp: msg.GetTimestamp()})
 				}
 				a.allInputsmap[id] += diff
 			} else if diff < 0 {
 				a.warnLog.Printf("warning deviation in data (id: %d) -> rawInputs: %d, GetValue() in event: %d", id, a.rawInputsmap, msg.GetValue())
 				if msg.GetValue() < 4 {
-					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: msg.GetValue()})
+					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: msg.GetValue(), Timestamp: msg.GetTimestamp()})
 					a.inputsmap[id] += msg.GetValue()
 					a.allInputsmap[id] += msg.GetValue()
 				}
@@ -302,13 +362,13 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				} else {
 					a.outputsmap[id] += diff
 					a.rawOutputsmap[id] = msg.GetValue()
-					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: diff})
+					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: diff, Timestamp: msg.GetTimestamp()})
 				}
 				a.allOutputsmap[id] += diff
 			} else if diff < 0 {
 				a.warnLog.Printf("warning deviation in data (id: %d)-> rawOutputs: %d, GetValue() in event: %d", id, a.rawOutputsmap, msg.GetValue())
 				if msg.GetValue() < 4 {
-					ctx.Send(a.events, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: msg.GetValue()})
+					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: msg.GetValue(), Timestamp: msg.GetTimestamp()})
 					a.outputsmap[id] += msg.GetValue()
 					a.allOutputsmap[id] += msg.GetValue()
 				}
@@ -359,6 +419,10 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 		a.buildLog.Printf("data: %q", data)
 		Publish(topicEvents, data)
+	case *MsgClockStep:
+		if a.video != nil {
+			ctx.Send(a.video, msg)
+		}
 	case *MsgDoor:
 		ctx.Send(a.events, msg)
 		a.puertas[msg.ID] = msg.Value

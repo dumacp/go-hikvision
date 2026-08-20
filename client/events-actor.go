@@ -102,12 +102,17 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 		State    uint    `json:"state"`
 		Counters []int64 `json:"counters"`
 		Type     string  `json:"type,omitempty"`
+		// EventID es la llave con la que la plataforma une este paso con el evento
+		// COUNTERSDOORVIDEO que llega después, cuando el clip ya está en disco. Se
+		// omite si el paso no lo trae, como los replicados de una boltdb anterior.
+		EventID string `json:"event_id,omitempty"`
 	}{
 		frame,
 		int(v.ID),
 		doorState,
 		contadores[0:2],
 		"CAMERA",
+		v.GetUid(),
 	}
 	message.Value = val
 

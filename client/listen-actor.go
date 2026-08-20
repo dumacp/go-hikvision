@@ -158,6 +158,9 @@ func (act *ListenActor) runListen(ctx context.Context) {
 				}
 				act.warnLog.Printf("camera (id: %d) clock stepped back %v, taking %v as the new reference",
 					id, back, dateTime)
+				// Los recortes de video pendientes de esta puerta quedan inservibles:
+				// su marca de tiempo ya no apunta a la misma posición de la grabación.
+				act.context.Send(act.countingActor, &MsgClockStep{ID: int32(id)})
 			}
 			act.timeBefore[id] = dateTime
 
@@ -170,12 +173,14 @@ func (act *ListenActor) runListen(ctx context.Context) {
 			}
 			enters := event.PeopleCounting.Enter
 			if diff := enters - act.entersBefore[id]; diff > 0 {
-				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.Event_INPUT, Value: enters})
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.Event_INPUT,
+					Value: enters, Timestamp: dateTime.Unix()})
 			}
 			act.entersBefore[id] = enters
 			exits := event.PeopleCounting.Exit
 			if diff := exits - act.exitsBefore[id]; diff > 0 {
-				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.Event_OUTPUT, Value: exits})
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id), Type: messages.Event_OUTPUT,
+					Value: exits, Timestamp: dateTime.Unix()})
 			}
 			act.exitsBefore[id] = exits
 		case *peoplecounting.EventNotificationAlert:

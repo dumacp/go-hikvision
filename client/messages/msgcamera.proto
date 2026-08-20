@@ -23,6 +23,13 @@ message Event {
 	EventType type = 1;
 	int64 value = 2;
 	int32 ID = 3;
+	// timestamp del evento en segundos Unix, tomado del dateTime que envia la camara.
+	// Es el reloj de la camara, que es el mismo que indexa sus grabaciones: por eso
+	// sirve para pedir el recorte de video aunque ese reloj este corrido.
+	int64 timestamp = 4;
+	// uid identifica de forma inequivoca este paso contado. Viaja al evento de MQTT y
+	// al nombre del sidecar del clip, y es la llave con la que la plataforma une ambos.
+	string uid = 5;
 }
 
 message Snapshot {
