@@ -1,5 +1,16 @@
 {
   "permissions": {
+    "defaultMode": "dontAsk",
+    "deny": [
+      "Bash(sudo:*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(dd:*)",
+      "Bash(mkfs:*)",
+      "Bash(git push:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)"
+    ],
     "allow": [
       "Bash(go build:*)",
       "Bash(go vet:*)",
