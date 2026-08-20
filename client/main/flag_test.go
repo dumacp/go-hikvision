@@ -92,6 +92,105 @@ func TestResolveCamerasErrores(t *testing.T) {
 	}
 }
 
+// TestResolveDoorBoolsCompatibilidad fija el comportamiento que hay en campo desde 1.0.25.
+// Si alguno de estos casos cambia, un equipo desplegado cambia de comportamiento sin que
+// nadie toque su unit file.
+func TestResolveDoorBoolsCompatibilidad(t *testing.T) {
+	casos := []struct {
+		nombre string
+		in     []string
+		quiero map[int]bool
+	}{
+		// Un solo valor configura la puerta 0, y NO las dos. Es la forma que está
+		// desplegada y la razón por la que existe la sintaxis explícita.
+		{"un valor", []string{"true"}, map[int]bool{0: true}},
+		{"dos valores", []string{"false", "true"}, map[int]bool{0: false, 1: true}},
+		// La manga ancha histórica: cualquier cosa distinta de TRUE es false, sin avisar.
+		// Se conserva a propósito en la forma posicional.
+		{"case insensitive", []string{"TrUe"}, map[int]bool{0: true}},
+		{"basura es false", []string{"sí"}, map[int]bool{0: false}},
+		{"vacío es false", []string{""}, map[int]bool{0: false}},
+		{"typo es false", []string{"tru"}, map[int]bool{0: false}},
+	}
+	for _, c := range casos {
+		got, err := resolveDoorBools("zeroOpenState", c.in)
+		if err != nil {
+			t.Errorf("%s: error inesperado: %s", c.nombre, err)
+			continue
+		}
+		if len(got) != len(c.quiero) {
+			t.Errorf("%s: resolveDoorBools(%v) = %v, quiero %v", c.nombre, c.in, got, c.quiero)
+			continue
+		}
+		for id, v := range c.quiero {
+			if got[id] != v {
+				t.Errorf("%s: puerta %d = %v, quiero %v", c.nombre, id, got[id], v)
+			}
+		}
+	}
+}
+
+func TestResolveDoorBoolsExplicita(t *testing.T) {
+	// El caso que motivó la sintaxis: configurar solo la puerta 1, sin relleno.
+	got, err := resolveDoorBools("zeroOpenState", []string{"1=true"})
+	if err != nil {
+		t.Fatalf("error inesperado: %s", err)
+	}
+	if len(got) != 1 || !got[1] {
+		t.Fatalf("solo la puerta 1 = %v, quiero {1:true}", got)
+	}
+	// La puerta 0 NO queda configurada: se deja el default del actor en vez de inventar
+	// un false que nadie pidió.
+	if _, ok := got[0]; ok {
+		t.Error("la puerta 0 no debería quedar configurada")
+	}
+
+	got, err = resolveDoorBools("zeroOpenState", []string{"1=TRUE", "0=False"})
+	if err != nil {
+		t.Fatalf("error inesperado: %s", err)
+	}
+	if got[0] || !got[1] {
+		t.Errorf("fuera de orden = %v, quiero {0:false, 1:true}", got)
+	}
+}
+
+func TestResolveDoorBoolsErrores(t *testing.T) {
+	casos := []struct {
+		nombre string
+		in     []string
+	}{
+		{"mezcla de formas", []string{"true", "1=true"}},
+		{"mezcla al revés", []string{"0=true", "false"}},
+		// En la forma explícita un typo es error, no un false silencioso: es sintaxis
+		// nueva y no hay compatibilidad que conservar.
+		{"typo en el valor", []string{"1=tru"}},
+		{"valor vacío", []string{"1="}},
+		{"id no numérico", []string{"trasera=true"}},
+		{"id fuera de rango", []string{"99=true"}},
+		{"id negativo", []string{"-1=true"}},
+		{"id repetido", []string{"1=true", "1=false"}},
+	}
+	for _, c := range casos {
+		if _, err := resolveDoorBools("zeroOpenState", c.in); err == nil {
+			t.Errorf("%s: resolveDoorBools(%v) no devolvió error", c.nombre, c.in)
+		}
+	}
+}
+
+func TestDescribeDoorBools(t *testing.T) {
+	if got := describeDoorBools(nil); got != "sin configurar (default)" {
+		t.Errorf("nil = %q", got)
+	}
+	if got := describeDoorBools(map[int]bool{1: true}); got != "puerta 1 = true" {
+		t.Errorf("una puerta = %q", got)
+	}
+	// El orden tiene que ser estable aunque venga de un mapa.
+	quiero := "puerta 0 = false, puerta 1 = true"
+	if got := describeDoorBools(map[int]bool{1: true, 0: false}); got != quiero {
+		t.Errorf("dos puertas = %q, quiero %q", got, quiero)
+	}
+}
+
 func TestDescribeCameras(t *testing.T) {
 	casos := []struct {
 		in     []string

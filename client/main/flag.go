@@ -6,19 +6,103 @@ import (
 	"strings"
 )
 
-type zeroFlags []bool
+// doorBoolFlags collects the occurrences of -zeroOpenState y -countWithCloseDoor verbatim,
+// para poder distinguir después las dos formas aceptadas:
+//
+//	-zeroOpenState=true      posicional: la n-ésima aparición es la puerta n-1
+//	-zeroOpenState 1=true    explícita: el id va escrito
+//
+// El valor se guarda crudo en vez de convertirlo acá, porque la conversión depende de la
+// forma: la posicional tiene que conservar la manga ancha histórica —cualquier cosa distinta
+// de TRUE es false— y la explícita no.
+type doorBoolFlags []string
 
-func (i *zeroFlags) String() string {
+func (i *doorBoolFlags) String() string {
 	return fmt.Sprintf("%v", *i)
 }
 
-func (i *zeroFlags) Set(value string) error {
-	if len(value) > 0 && strings.ToUpper(value) == "TRUE" {
-		*i = append(*i, true)
-	} else {
-		*i = append(*i, false)
-	}
+func (i *doorBoolFlags) Set(value string) error {
+	*i = append(*i, strings.TrimSpace(value))
 	return nil
+}
+
+// resolveDoorBools resuelve las ocurrencias a un mapa por puerta.
+//
+// Mismo criterio que resolveCameras: mezclar las dos formas es error, no un intento de
+// adivinar. `name` es el nombre del flag, solo para que el mensaje diga cuál falló.
+//
+// La diferencia con resolveCameras está en la manga ancha de la forma posicional: ahí
+// cualquier valor distinto de TRUE es false, sin avisar, porque así se comporta desde 1.0.25
+// y hay equipos en campo dependiendo de eso. En la forma explícita, en cambio, un valor que
+// no sea true o false es error: es sintaxis nueva y no hay nada que conservar, y un
+// `1=tru` que quedara en false en silencio es justo el error que se está tratando de evitar.
+func resolveDoorBools(name string, raw []string) (map[int]bool, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var explicitas int
+	for _, v := range raw {
+		if strings.Contains(v, "=") {
+			explicitas++
+		}
+	}
+	out := make(map[int]bool, len(raw))
+
+	switch {
+	case explicitas == 0:
+		for id, v := range raw {
+			if id > maxDoorID {
+				return nil, fmt.Errorf("-%s tiene %d apariciones, más que las %d puertas "+
+					"admitidas", name, len(raw), maxDoorID+1)
+			}
+			out[id] = strings.EqualFold(v, "TRUE")
+		}
+		return out, nil
+	case explicitas != len(raw):
+		return nil, fmt.Errorf("-%s mezcla las dos formas: %v. Usá todas con id explícito "+
+			"(id=valor) o todas posicionales, no una mezcla", name, raw)
+	}
+
+	for _, v := range raw {
+		corte := strings.Index(v, "=")
+		texto, valor := v[:corte], v[corte+1:]
+		id, err := strconv.Atoi(texto)
+		if err != nil {
+			return nil, fmt.Errorf("-%s %q: %q no es un id de puerta", name, v, texto)
+		}
+		if id < 0 || id > maxDoorID {
+			return nil, fmt.Errorf("-%s %q: el id de puerta %d está fuera de 0..%d",
+				name, v, id, maxDoorID)
+		}
+		if _, ok := out[id]; ok {
+			return nil, fmt.Errorf("-%s repite el id de puerta %d", name, id)
+		}
+		switch {
+		case strings.EqualFold(valor, "true"):
+			out[id] = true
+		case strings.EqualFold(valor, "false"):
+			out[id] = false
+		default:
+			return nil, fmt.Errorf("-%s %q: %q no es true ni false", name, v, valor)
+		}
+	}
+	return out, nil
+}
+
+// describeDoorBools arma la línea del banner. Imprime el id de cada puerta, porque el slice
+// crudo `[false true]` esconde justamente el índice, que es lo único que importa acá.
+func describeDoorBools(m map[int]bool) string {
+	if len(m) == 0 {
+		return "sin configurar (default)"
+	}
+	partes := make([]string, 0, len(m))
+	// Se recorre por id y no por el mapa, para que la línea salga siempre en el mismo orden.
+	for id := 0; id <= maxDoorID; id++ {
+		if v, ok := m[id]; ok {
+			partes = append(partes, fmt.Sprintf("puerta %d = %v", id, v))
+		}
+	}
+	return strings.Join(partes, ", ")
 }
 
 // maxDoorID bounds the explicit door id of -camera. It is a guard against a typo, not a
@@ -124,19 +208,4 @@ func describeCameras(cams []string) string {
 		return "ninguna"
 	}
 	return strings.Join(partes, ", ")
-}
-
-type closeFlags []bool
-
-func (i *closeFlags) String() string {
-	return fmt.Sprintf("%v", *i)
-}
-
-func (i *closeFlags) Set(value string) error {
-	if len(value) > 0 && strings.ToUpper(value) == "TRUE" {
-		*i = append(*i, true)
-	} else {
-		*i = append(*i, false)
-	}
-	return nil
 }
