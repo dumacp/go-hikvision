@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.33"
+	showVersion = "1.0.34"
 )
 
 var debug bool
@@ -62,7 +62,10 @@ func init() {
 		"read user and password from stdin (one per line) and print the "+envCredentials+" value")
 	flag.Var(&isZeroOpenState, "zeroOpenState", "Is Zero the open state?")
 	flag.Var(&enableCountWithCloseDoor, "countWithCloseDoor", "enable count with close door?")
-	flag.Var(&cameras, "camera", "camera IP of a door; the n-th occurrence is door n-1")
+	flag.Var(&cameras, "camera",
+		"camera address of a door, as \"ip:door\" (e.g. 192.168.188.21:1). Without the \":door\" "+
+			"suffix it is positional and the n-th occurrence is door n-1; the two forms cannot "+
+			"be mixed")
 	flag.StringVar(&videoDir, "videoDir", "",
 		"directory to store the video clip of every pass; empty disables the extraction")
 	// 10s de pre-roll medidos contra tráfico real: el dateTime del evento llega entre
@@ -137,6 +140,14 @@ func main() {
 
 	initLogs(debug, logStd, logXML)
 
+	// Una lista de cámaras mal escrita se detiene acá y no arranca a medias: contar la
+	// puerta equivocada durante un turno completo es peor que no arrancar, porque los
+	// contadores publicados quedan mal y no hay forma de repararlos después.
+	camerasByDoor, err := resolveCameras(cameras)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
 	// Credentials are only needed to talk to the camera, so a missing or unreadable
 	// value must not stop the counting: warn and keep going.
 	camUser, camPass, err := credentialsFromEnv()
@@ -167,8 +178,8 @@ func main() {
 
 	fmt.Printf("zeroOpenState: %v\n", isZeroOpenState)
 	fmt.Printf("countWithCloseDoor: %v\n", enableCountWithCloseDoor)
-	if len(cameras) > 0 {
-		fmt.Printf("cameras (index = door id): %v\n", cameras)
+	if len(camerasByDoor) > 0 {
+		fmt.Printf("cameras: %s\n", describeCameras(camerasByDoor))
 	} else {
 		fmt.Printf("cameras: not configured, using the legacy rule (%s -> door 1, rest -> door 0)\n",
 			client.LegacyBackDoorIP())
@@ -193,12 +204,12 @@ func main() {
 	switch {
 	case len(videoDir) == 0:
 		infolog.Println("video extraction disabled (-videoDir not set)")
-	case len(cameras) == 0:
+	case len(camerasByDoor) == 0:
 		warnlog.Println("video extraction disabled: -videoDir is set but there is no -camera")
 	case len(camUser) == 0:
 		warnlog.Printf("video extraction disabled: -videoDir is set but %s is not usable", envCredentials)
 	default:
-		vid := client.NewVideoActor(cameras, camUser, camPass, videoDir,
+		vid := client.NewVideoActor(camerasByDoor, camUser, camPass, videoDir,
 			videoPreRoll, videoDuration, videoQueue)
 		vid.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 		if debug {
@@ -214,13 +225,13 @@ func main() {
 	switch {
 	case len(ntpServer) == 0:
 		infolog.Println("camera time maintenance disabled (-ntpServer not set)")
-	case len(cameras) == 0:
+	case len(camerasByDoor) == 0:
 		warnlog.Println("camera time maintenance disabled: -ntpServer is set but there is no -camera")
 	case len(camUser) == 0:
 		warnlog.Printf("camera time maintenance disabled: -ntpServer is set but %s is not usable",
 			envCredentials)
 	default:
-		cam := client.NewCameraActor(cameras, camUser, camPass, client.CameraConfig{
+		cam := client.NewCameraActor(camerasByDoor, camUser, camPass, client.CameraConfig{
 			Server:      ntpServer,
 			Port:        ntpPort,
 			Interval:    ntpInterval,
@@ -263,7 +274,7 @@ func main() {
 	}
 
 	listenner := client.NewListen(socket, pidCounting)
-	listenner.SetCameras(cameras)
+	listenner.SetCameras(camerasByDoor)
 	listenner.SetLogError(errlog).SetLogWarn(warnlog).
 		SetLogInfo(infolog).SetLogBuild(buildlog).SetLogCamera(cameralog)
 

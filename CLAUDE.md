@@ -99,13 +99,41 @@ Sobre `messages.Event_INPUT` / `_OUTPUT` en [client/counting-actor.go:245-323](c
 
 ### Flags (`client/main/flag.go`)
 
-`-zeroOpenState`, `-countWithCloseDoor` y `-camera` son **repetibles** y posicionales: la n-ésima
-aparición configura el `id` n-1. En los dos booleanos, cualquier valor distinto de `TRUE`
-(case-insensitive) es `false`.
+`-zeroOpenState`, `-countWithCloseDoor` y `-camera` son **repetibles**. En los dos booleanos,
+cualquier valor distinto de `TRUE` (case-insensitive) es `false`, y siguen siendo **posicionales**:
+la n-ésima aparición configura el `id` n-1.
 
-`-camera` toma la IP de la cámara de cada puerta y es lo que reemplaza la IP hardcodeada al
-derivar el `id`. Sin `-camera` se mantiene **exactamente** la regla histórica, para no alterar los
-equipos ya desplegados.
+`-camera` acepta dos formas, y la explícita es la que conviene usar:
+
+```bash
+-camera 192.168.188.21:1                     # explícita: el id va escrito
+-camera 10.0.0.1:0 -camera 10.0.0.2:1        # dos puertas, el orden no importa
+-camera 10.0.0.1 -camera 10.0.0.2            # posicional, la histórica
+```
+
+**La forma posicional es una trampa en el despliegue más común**: un vehículo con solo la cámara
+trasera. Escribir un único `-camera 192.168.188.21` la deja como puerta **0**, mientras la regla
+histórica clasificaba esa misma dirección como puerta **1** — los contadores se moverían de
+`inputs1` a `inputs0` y la plataforma vería una serie congelarse y otra arrancar de cero, sin
+ningún error. Con `:1` eso no pasa.
+
+`resolveCameras` ([client/main/flag.go](client/main/flag.go)) resuelve las ocurrencias a un slice
+indexado por puerta, y **falla al arrancar** en vez de adivinar:
+
+- **mezclar las dos formas es error.** Una ocurrencia posicional al lado de una explícita no tiene
+  un significado obvio —¿toma el siguiente hueco libre, o la siguiente posición?— y cualquier
+  respuesta sería una regla más que recordar;
+- el `id` va de 0 a `maxDoorID` (15). El límite existe para atrapar un puerto TCP escrito como id:
+  `-camera ip:8080` armaría un slice de 8081 entradas y no contaría nada. Un puerto en la dirección
+  **no se admite** de todos modos, porque la extracción usa RTSP en 554;
+- dos cámaras con el mismo `id` es error: una taparía a la otra en silencio;
+- los `id` que nadie reclama quedan vacíos, y todo el binario ya los salta (`doorID` no los compara,
+  `CameraActor` no los revisa, `VideoActor` no extrae de ellos).
+
+Sin `-camera` se mantiene **exactamente** la regla histórica, para no alterar los equipos ya
+desplegados. Si un equipo solo tiene la trasera en `192.168.188.21` y ya está en producción, no
+pasar `-camera` es lo más seguro — salvo que se quiera video o mantenimiento de cámara, que sí lo
+exigen.
 
 ### Extracción de video (`-videoDir`)
 
