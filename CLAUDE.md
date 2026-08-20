@@ -406,6 +406,16 @@ habilitarlo: si pediste `-smartCodec off`, se aplica. Cinco cosas que explican e
   en ~2 minutos. Es aceptable porque ocurre **una vez por cámara**: en estado estable el perfil
   coincide y no se escribe nada. Si aparece seguido, algo no está persistiendo y hay que mirar
   el log.
+- **Un `statusCode 1 OK` NO garantiza que el valor quedó.** Medido: pedirle 30 fps —que no
+  está entre los que admite— responde **OK y guarda 24 en silencio**. Sin verificar, el ciclo
+  siguiente vuelve a ver la diferencia, escribe otra vez, y queda un PUT por cámara cada media
+  hora **para siempre**, con un log que dice "corregida" sin que nada se corrija. Por eso
+  después de cada escritura se relee y se vuelve a medir la diferencia; si algo no quedó, se
+  loguea ERROR, se publica `encoder_rejected`, y **no se vuelve a intentar en esa cámara** hasta
+  el próximo arranque. La comprobación es genérica y no valida contra la lista de capacidades:
+  así atrapa cualquier recorte silencioso, de este modelo o de otro. Y cuando no queda, **no se
+  declara `fixed`**: decirle a la plataforma que se corrigió algo que la cámara no aplicó es
+  peor que no decir nada.
 - **`videoCodecType` se reporta pero NUNCA se escribe.** `video/extract.go` solo maneja H.264;
   poner H.265 desde acá rompería la extracción en silencio. El actor deja WARN y el codec
   observado viaja en el evento (`video_codec`, `video_fps`, `smart_codec`) para que la

@@ -120,7 +120,8 @@ cuando detecta que su reloj derivó:
 
 - `status` es `fixed` (se corrigió algo), `drift` (el reloj derivó más de `-timeDriftMax` durante
   tres ciclos), `ok` (volvió a hora después de haber alarmado), `storage` / `storage_ok` (el medio
-  de grabación dejó de servir o se recuperó) o `reboot` (se está reiniciando la cámara para
+  de grabación dejó de servir o se recuperó), `encoder_rejected` (un valor del perfil se escribió
+  con OK y la cámara no lo guardó — el flag pide algo que el modelo no admite) o `reboot` (se está reiniciando la cámara para
   aplicar el perfil de codificación).
 - **`reboot` y `fixed` no salen los dos por el mismo cambio.** Cuando hay reinicio se publica solo
   `reboot`, que lleva el mismo arreglo en `fixed` y además avisa que la cámara se va a caer un

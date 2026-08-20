@@ -121,6 +121,10 @@ type camTimeState struct {
 	rebooted bool
 	// rebootWarned evita repetir en cada ciclo el aviso de "hay cambios sin aplicar".
 	rebootWarned bool
+	// encoderGiveUp deja de escribir el encoder de esta cámara hasta el próximo arranque,
+	// porque un valor pedido no quedó guardado y reintentarlo es un PUT por ciclo para
+	// siempre. Hay que corregir el flag, no insistir.
+	encoderGiveUp bool
 }
 
 // msgCameraTick dispara un ciclo de revisión.
@@ -175,6 +179,10 @@ type msgCameraResult struct {
 	// encoderPending son las diferencias medidas y NO escritas todavía, porque el binario
 	// aún no llegó a encoderMinUptime. Sirven para avisar qué falta aplicar.
 	encoderPending []string
+	// encoderStuck son los campos que se escribieron con OK y NO quedaron guardados: la
+	// cámara recortó el valor en silencio. Sin esto el ciclo reescribiría para siempre.
+	encoderStuck  []string
+	stuckObserved string
 }
 
 // NewCameraActor crea el actor.
@@ -250,21 +258,35 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 	// y eso solo se puede hacer desde el hilo del actor.
 	ref, refFuente := a.reference(ctx)
 
+	// El perfil de codificación se decide acá, en el hilo del actor, y no en la goroutine.
+	//
+	// Se escribe siempre que haya algo que alinear, con dos condiciones: que el binario lleve
+	// encendido al menos encoderMinUptime, y que esta cámara no haya rechazado ya un valor.
+	// El PUT y el reinicio quedan en el mismo ciclo, segundos aparte, porque un cambio que
+	// responde statusCode 7 queda **guardado pero inerte y la cámara reporta el valor
+	// guardado, no el efectivo**: si se escribiera ahora y el reinicio quedara para después,
+	// un arranque del binario en el medio haría que el ciclo siguiente no viera diferencia y
+	// nadie reiniciara nunca.
+	encoderListo := a.want.wantsEncoder() && time.Since(a.startedAt) >= encoderMinUptime
+
 	trabajos := make([]struct {
-		door int32
-		host string
+		door    int32
+		host    string
+		encoder bool
 	}, 0, len(a.cameras))
 	for i, host := range a.cameras {
 		if len(host) == 0 {
 			continue
 		}
-		if st := a.state[int32(i)]; st != nil && st.unauthorized {
+		st := a.state[int32(i)]
+		if st != nil && st.unauthorized {
 			continue
 		}
 		trabajos = append(trabajos, struct {
-			door int32
-			host string
-		}{int32(i), host})
+			door    int32
+			host    string
+			encoder bool
+		}{int32(i), host, encoderListo && (st == nil || !st.encoderGiveUp)})
 	}
 	if len(trabajos) == 0 {
 		return
@@ -273,29 +295,16 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 	a.working = true
 	self, system := ctx.Self(), ctx.ActorSystem()
 	cctx, cancel := context.WithTimeout(context.Background(),
-		time.Duration(len(trabajos))*4*cameraHTTPTimeout)
+		time.Duration(len(trabajos))*5*cameraHTTPTimeout)
 	a.cancel = cancel
 
-	// El perfil de codificación se decide acá, en el hilo del actor, y no en la goroutine.
-	//
-	// Se escribe siempre que haya algo que alinear, con una sola condición: que el binario
-	// lleve encendido al menos encoderMinUptime. El PUT y el reinicio quedan en el mismo
-	// ciclo, segundos aparte, porque un cambio que responde statusCode 7 queda **guardado
-	// pero inerte y la cámara reporta el valor guardado, no el efectivo**: si se escribiera
-	// ahora y el reinicio quedara para después, un arranque del binario en el medio haría que
-	// el ciclo siguiente no viera diferencia y nadie reiniciara nunca. La cámara seguiría
-	// grabando con el ajuste viejo mientras la configuración y el API coinciden en decir lo
-	// contrario.
-	escribirEncoder := a.want.wantsEncoder() &&
-		time.Since(a.startedAt) >= encoderMinUptime
-
-	a.buildLog.Printf("ciclo de hora sobre %d cámara(s), referencia %s (encoder: escribe=%v)",
-		len(trabajos), refFuente, escribirEncoder)
+	a.buildLog.Printf("ciclo de hora sobre %d cámara(s), referencia %s (encoder listo=%v)",
+		len(trabajos), refFuente, encoderListo)
 
 	go func() {
 		defer cancel()
 		for _, t := range trabajos {
-			res := a.checkCamera(cctx, t.door, t.host, ref, escribirEncoder)
+			res := a.checkCamera(cctx, t.door, t.host, ref, t.encoder)
 			system.Root.Send(self, res)
 		}
 		// Una marca final para liberar el candado, con door negativo.
@@ -529,37 +538,10 @@ func (a *CameraActor) checkEncoder(ctx context.Context, cli *isapi.Client, res *
 		return
 	}
 
-	var cambios []string
-	if quiero, ok := smartCodecWanted(a.want.SmartCodec); ok {
-		if nuevo, cambio, err := isapi.SetSmartCodec(raw, quiero); err != nil {
-			res.encoderErr = fmt.Errorf("armando SmartCodec: %w", err)
-			return
-		} else if cambio {
-			raw = nuevo
-			cambios = append(cambios, fmt.Sprintf("SmartCodec -> %v", quiero))
-		}
-	}
-	// ISAPI guarda los fps en centi-fps: 2000 son 20 fps. Confundirlo lleva a creer que la
-	// cámara graba a 2000 fps y a escribir un valor absurdo.
-	if a.want.FrameRate > 0 {
-		if nuevo, cambio, err := isapi.SetVideoField(raw, "maxFrameRate",
-			fmt.Sprintf("%d", a.want.FrameRate*100)); err != nil {
-			res.encoderErr = fmt.Errorf("armando maxFrameRate: %w", err)
-			return
-		} else if cambio {
-			raw = nuevo
-			cambios = append(cambios, fmt.Sprintf("maxFrameRate -> %d fps", a.want.FrameRate))
-		}
-	}
-	if a.want.GopFrames > 0 {
-		if nuevo, cambio, err := isapi.SetVideoField(raw, "GovLength",
-			fmt.Sprintf("%d", a.want.GopFrames)); err != nil {
-			res.encoderErr = fmt.Errorf("armando GovLength: %w", err)
-			return
-		} else if cambio {
-			raw = nuevo
-			cambios = append(cambios, fmt.Sprintf("GovLength -> %d cuadros", a.want.GopFrames))
-		}
+	nuevo, cambios, err := a.encoderDiff(raw)
+	if err != nil {
+		res.encoderErr = err
+		return
 	}
 	if len(cambios) == 0 {
 		return
@@ -569,7 +551,7 @@ func (a *CameraActor) checkEncoder(ctx context.Context, cli *isapi.Client, res *
 		return
 	}
 
-	if err := cli.PutChannelRaw(ctx, videoTrack, raw); err != nil {
+	if err := cli.PutChannelRaw(ctx, videoTrack, nuevo); err != nil {
 		if !rebootRequired(err) {
 			res.encoderErr = fmt.Errorf("escribiendo el perfil de codificación: %w", err)
 			res.unauthorized = res.unauthorized || errors.Is(err, isapi.ErrUnauthorized)
@@ -580,7 +562,82 @@ func (a *CameraActor) checkEncoder(ctx context.Context, cli *isapi.Client, res *
 		// maxFrameRate responden 1 y se aplican en caliente; SmartCodec responde 7.
 		res.rebootRequired = true
 	}
-	res.fixed = append(res.fixed, "codificación: "+strings.Join(cambios, ", "))
+
+	// Verificar que el valor quedó guardado, porque un OK no lo garantiza.
+	//
+	// Medido en el DS-2XM6825G0: pedirle 30 fps —que no está en su lista de valores
+	// admitidos— responde statusCode 1 OK y guarda 24 **en silencio**. Sin esta
+	// comprobación el ciclo siguiente vuelve a ver la diferencia, escribe otra vez, y
+	// queda un PUT por cámara cada media hora para siempre, con una línea de log que dice
+	// "corregida" sin que nada se corrija. Eso rompe la idempotencia, que es la propiedad
+	// sobre la que está construido todo esto.
+	//
+	// La comprobación es genérica a propósito: no valida contra la lista de capacidades
+	// —que solo existe para algunos campos— sino que relee y vuelve a medir la diferencia,
+	// así atrapa cualquier recorte silencioso, de este modelo o de otro.
+	//
+	// Ojo con el statusCode 7: ahí la cámara reporta el valor GUARDADO, que es el que se
+	// pidió, así que la relectura no da falso positivo aunque el cambio esté inerte.
+	verificar, err := cli.GetChannelRaw(ctx, videoTrack)
+	if err != nil {
+		// No se pudo verificar. Se declara aplicado, que es lo que dijo la cámara, y el
+		// ciclo siguiente vuelve a medir.
+		res.fixed = append(res.fixed, "codificación: "+strings.Join(cambios, ", "))
+		return
+	}
+	_, restantes, err := a.encoderDiff(verificar)
+	if err != nil || len(restantes) == 0 {
+		res.fixed = append(res.fixed, "codificación: "+strings.Join(cambios, ", "))
+		return
+	}
+	// No quedó guardado, así que NO se declara corregido: decir "fixed" de algo que la
+	// cámara no aplicó es mentirle a la plataforma.
+	res.encoderStuck = restantes
+	if enc, err := cli.GetChannelEncoder(ctx, videoTrack); err == nil {
+		res.stuckObserved = fmt.Sprintf("%.0f fps, GOP %d, SmartCodec %v",
+			enc.FrameRate(), enc.Video.GovLength, enc.Video.SmartCodec.Enabled)
+	}
+}
+
+// encoderDiff calcula el XML a escribir y describe qué cambia. Sin cambios devuelve una
+// lista vacía, que es lo que hace idempotente al ciclo.
+func (a *CameraActor) encoderDiff(raw []byte) ([]byte, []string, error) {
+	var cambios []string
+	if quiero, ok := smartCodecWanted(a.want.SmartCodec); ok {
+		nuevo, cambio, err := isapi.SetSmartCodec(raw, quiero)
+		if err != nil {
+			return nil, nil, fmt.Errorf("armando SmartCodec: %w", err)
+		}
+		if cambio {
+			raw = nuevo
+			cambios = append(cambios, fmt.Sprintf("SmartCodec -> %v", quiero))
+		}
+	}
+	// ISAPI guarda los fps en centi-fps: 2000 son 20 fps. Confundirlo lleva a creer que la
+	// cámara graba a 2000 fps y a escribir un valor absurdo.
+	if a.want.FrameRate > 0 {
+		nuevo, cambio, err := isapi.SetVideoField(raw, "maxFrameRate",
+			fmt.Sprintf("%d", a.want.FrameRate*100))
+		if err != nil {
+			return nil, nil, fmt.Errorf("armando maxFrameRate: %w", err)
+		}
+		if cambio {
+			raw = nuevo
+			cambios = append(cambios, fmt.Sprintf("maxFrameRate -> %d fps", a.want.FrameRate))
+		}
+	}
+	if a.want.GopFrames > 0 {
+		nuevo, cambio, err := isapi.SetVideoField(raw, "GovLength",
+			fmt.Sprintf("%d", a.want.GopFrames))
+		if err != nil {
+			return nil, nil, fmt.Errorf("armando GovLength: %w", err)
+		}
+		if cambio {
+			raw = nuevo
+			cambios = append(cambios, fmt.Sprintf("GovLength -> %d cuadros", a.want.GopFrames))
+		}
+	}
+	return raw, cambios, nil
 }
 
 // smartCodecWanted traduce el flag a un booleano. El segundo valor es falso cuando no hay
@@ -702,6 +759,19 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 		st.rebootWarned = false
 	}
 
+	// Un valor que se escribió con OK y no quedó guardado. Se deja de intentar en esta
+	// cámara: reintentarlo es un PUT por ciclo para siempre, y lo que hay que corregir es
+	// el flag, no la cámara.
+	if len(res.encoderStuck) > 0 {
+		st.encoderGiveUp = true
+		a.errLog.Printf("cámara de la puerta %d (%s): %s se escribió con OK pero NO quedó "+
+			"guardado (la cámara reporta %s). Seguramente el valor pedido no está entre los "+
+			"que admite: revisá /ISAPI/Streaming/channels/101/capabilities. No se vuelve a "+
+			"intentar hasta el próximo arranque del binario",
+			res.door, res.host, strings.Join(res.encoderStuck, ", "), res.stuckObserved)
+		a.publish(ctx, res, st, "encoder_rejected")
+	}
+
 	// El reinicio se decide en el mismo ciclo que escribió, no después: acá ya se sabe que
 	// el ciclo cayó dentro de la ventana, porque si no, no se habría escrito.
 	if res.rebootRequired {
@@ -759,7 +829,7 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 	// El "fixed" se omite si ya salió un "reboot": los dos llevarían el mismo arreglo en
 	// `fixed` y la plataforma vería dos mensajes para un solo cambio. El "reboot" es el más
 	// informativo de los dos, porque además dice que la cámara se va a caer un momento.
-	if len(res.fixed) > 0 && !res.rebootRequired {
+	if len(res.fixed) > 0 && !res.rebootRequired && len(res.encoderStuck) == 0 {
 		a.publish(ctx, res, st, "fixed")
 	}
 }
