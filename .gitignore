@@ -1,0 +1,12 @@
+# binarios compilados
+/hikvision
+/hikvision-*
+/main
+/client/main/main
+
+# configuración local del editor
+*.code-workspace
+
+# artefactos locales de prueba
+*.log
+/tmp/
