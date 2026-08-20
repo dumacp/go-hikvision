@@ -99,51 +99,46 @@ Sobre `messages.Event_INPUT` / `_OUTPUT` en [client/counting-actor.go:245-323](c
 
 ### Flags (`client/main/flag.go`)
 
-Los tres flags por puerta —`-camera`, `-zeroOpenState`, `-countWithCloseDoor`— son **repetibles** y
-aceptan dos formas: la **posicional** histórica, donde la n-ésima aparición configura el `id` n-1, y
-la **explícita**, donde el `id` va escrito. La explícita es la que conviene usar.
+Los tres flags por puerta —`-camera`, `-zeroOpenState`, `-countWithCloseDoor`— son **repetibles**,
+pero **no siguen la misma regla**, y la diferencia es deliberada.
+
+#### Los dos switches: uno cubre todas las puertas
 
 ```bash
--zeroOpenState 1=true  -countWithCloseDoor 1=false    # explícita
--zeroOpenState=false -zeroOpenState=true              # posicional, la histórica
+-zeroOpenState=true                          # aplica a TODAS las puertas
+-zeroOpenState=false -zeroOpenState=true     # posicional: puerta 0 y puerta 1
 ```
 
-Tres reglas comunes a los tres flags, todas resueltas en `client/main/flag.go` y todas fatales al
-arrancar: **mezclar las dos formas es error**, el `id` va de 0 a `maxDoorID` (15), y repetir un `id`
-es error. Detenerse es más barato que contar la puerta equivocada durante un turno, porque los
-contadores publicados quedan mal y no hay forma de repararlos después.
+Sintaxis sin cambios: un booleano por aparición, y cualquier valor distinto de `TRUE`
+(case-insensitive) es `false` **sin avisar** — hay equipos en campo dependiendo de eso desde 1.0.25.
 
-Diferencia deliberada en la manga ancha de los booleanos: en la forma **posicional** cualquier valor
-distinto de `TRUE` (case-insensitive) es `false` **sin avisar**, porque así se comporta desde 1.0.25
-y hay equipos en campo dependiendo de eso. En la **explícita** un valor que no sea `true` ni `false`
-es error — es sintaxis nueva, no hay nada que conservar, y un `1=tru` que quedara en `false` en
-silencio es justo el error que se está tratando de evitar.
+Lo que cambió es a qué puertas aplica **una sola** aparición: antes solo a la 0, ahora a todas
+(`applyDoorBool` en [client/main/flag.go](client/main/flag.go)). Estos switches describen cómo está
+cableado el vehículo —si el estado "abierta" llega como `0` o como `1`— y eso no cambia entre la
+puerta delantera y la trasera, así que un valor suelto es la convención del vehículo entero. Dos o
+más apariciones siguen siendo posicionales, que es la forma de darle un valor distinto a cada puerta.
 
-Y una asimetría que importa: la forma posicional siempre configura las puertas `0..n-1`, mientras la
-explícita configura **solo** los `id` nombrados y deja el resto con el default del actor
-(`openState = 1`, `countCloseDoor = false`).
-
-#### El caso de una sola puerta
-
-`-zeroOpenState` nació en **1.0.9** como un `flag.BoolVar` global, cuando `CountingActor` modelaba
-una sola puerta con escalares (`openState int`, `inputs int64`). En **1.0.25** los escalares pasaron
-a `map[int]...` y el flag se volvió repetible y posicional. Esa migración **ya cambió el significado
-de un flag suelto**: `-zeroOpenState=true` pasó de "la única puerta" a "solo la puerta 0".
-
-Por eso un equipo con **solo la cámara trasera** y un único `-zeroOpenState=true` está configurando
-la puerta 0, mientras los eventos caen en la puerta 1 y esta corre con el default. Y no da error: el
-gating ([counting-actor.go:316-323](client/counting-actor.go#L316-L323)) usa `openState = 1` cuando
-el `id` no está en el mapa. Dos síntomas, los dos visibles en el log como
+**Por qué importaba.** `-zeroOpenState` nació en **1.0.9** como un `flag.BoolVar` global, cuando
+`CountingActor` modelaba una sola puerta con escalares (`openState int`, `inputs int64`). En
+**1.0.25** los escalares pasaron a `map[int]...` y el flag se volvió posicional, con lo cual un flag
+suelto pasó de significar "la única puerta" a "solo la puerta 0". Un equipo con solo la cámara
+trasera y un único `-zeroOpenState=true` quedaba configurando la puerta 0 mientras los eventos caían
+en la 1, que corría con el default — y **no daba error**, porque el gating
+([counting-actor.go:316-323](client/counting-actor.go#L316-L323)) usa `openState = 1` cuando el `id`
+no está en el mapa. Dos síntomas, los dos visibles en el log como
 `counting inputs when door (id: 1) is closed`:
 
-- si el sistema de puertas publica "abierta" como `0`, la puerta 1 queda invertida y **descarta todos
+- si el sistema de puertas publica "abierta" como `0`, la puerta queda invertida y **descarta todos
   los cruces reales**;
-- si nunca llega un `MsgDoor` con `id: 1`, el `!ok` de esa condición **descarta todo** el conteo de
+- si nunca llega un `MsgDoor` con ese `id`, el `!ok` de esa condición **descarta todo** el conteo de
   esa puerta salvo que `-countWithCloseDoor` esté activo para ella.
 
-Escribir `-zeroOpenState 1=true` elimina la clase de error completa.
+**Ojo al actualizar** un equipo de dos puertas que hoy pasa un único valor: la puerta 1 pasa del
+default a ese valor. Si el default era el correcto por casualidad, esto la cambia.
 
-`-camera` acepta las mismas dos formas:
+#### `-camera`: el `id` va escrito
+
+Acá sí hay dos formas, porque una dirección IP no se puede replicar a todas las puertas:
 
 ```bash
 -camera 192.168.188.21:1                     # explícita: el id va escrito
@@ -157,12 +152,18 @@ histórica clasificaba esa misma dirección como puerta **1** — los contadores
 `inputs1` a `inputs0` y la plataforma vería una serie congelarse y otra arrancar de cero, sin
 ningún error. Con `:1` eso no pasa.
 
-Dos cosas propias de `-camera`, además de las tres reglas comunes:
+`resolveCameras` resuelve las apariciones a un slice indexado por puerta, y **falla al arrancar** en
+vez de adivinar. Detenerse es más barato que contar la puerta equivocada durante un turno: los
+contadores publicados quedan mal y no hay forma de repararlos después.
 
+- **mezclar las dos formas es error.** Una aparición posicional al lado de una explícita no tiene un
+  significado obvio —¿toma el siguiente hueco libre, o la siguiente posición?— y cualquier respuesta
+  sería una regla más que recordar;
 - **el límite de 15 en el `id` existe para atrapar un puerto TCP escrito como id.** Sin él,
   `-camera ip:8080` armaría un slice de 8081 entradas y no contaría nada. Y un puerto en la
   dirección **no se admite** de todos modos: el HTTP de ISAPI lo respetaría, pero la extracción usa
   RTSP en 554 y quedaría mal armada;
+- **repetir un `id` es error**: una cámara taparía a la otra en silencio;
 - los `id` que nadie reclama quedan vacíos, y todo el binario ya los salta (`doorID` no los compara,
   `CameraActor` no los revisa, `VideoActor` no extrae de ellos).
 

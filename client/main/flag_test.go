@@ -92,102 +92,99 @@ func TestResolveCamerasErrores(t *testing.T) {
 	}
 }
 
-// TestResolveDoorBoolsCompatibilidad fija el comportamiento que hay en campo desde 1.0.25.
-// Si alguno de estos casos cambia, un equipo desplegado cambia de comportamiento sin que
-// nadie toque su unit file.
-func TestResolveDoorBoolsCompatibilidad(t *testing.T) {
-	casos := []struct {
-		nombre string
-		in     []string
-		quiero map[int]bool
-	}{
-		// Un solo valor configura la puerta 0, y NO las dos. Es la forma que está
-		// desplegada y la razón por la que existe la sintaxis explícita.
-		{"un valor", []string{"true"}, map[int]bool{0: true}},
-		{"dos valores", []string{"false", "true"}, map[int]bool{0: false, 1: true}},
-		// La manga ancha histórica: cualquier cosa distinta de TRUE es false, sin avisar.
-		// Se conserva a propósito en la forma posicional.
-		{"case insensitive", []string{"TrUe"}, map[int]bool{0: true}},
-		{"basura es false", []string{"sí"}, map[int]bool{0: false}},
-		{"vacío es false", []string{""}, map[int]bool{0: false}},
-		{"typo es false", []string{"tru"}, map[int]bool{0: false}},
-	}
-	for _, c := range casos {
-		got, err := resolveDoorBools("zeroOpenState", c.in)
-		if err != nil {
-			t.Errorf("%s: error inesperado: %s", c.nombre, err)
-			continue
+// TestApplyDoorBoolUnValor fija la regla nueva: una sola aparición cubre TODAS las puertas.
+//
+// Es el caso que estaba mal. Un equipo con solo la cámara trasera y un único
+// -zeroOpenState=true configuraba la puerta 0 mientras los eventos caían en la 1, que
+// quedaba con el default del actor, y no daba error: solo descartaba conteos.
+func TestApplyDoorBoolUnValor(t *testing.T) {
+	for _, valor := range []bool{true, false} {
+		visto := map[int]bool{}
+		applyDoorBool([]bool{valor}, func(id int, v bool) { visto[id] = v })
+
+		if len(visto) != maxDoorID+1 {
+			t.Errorf("valor %v: se configuraron %d puertas, quiero %d",
+				valor, len(visto), maxDoorID+1)
 		}
-		if len(got) != len(c.quiero) {
-			t.Errorf("%s: resolveDoorBools(%v) = %v, quiero %v", c.nombre, c.in, got, c.quiero)
-			continue
-		}
-		for id, v := range c.quiero {
-			if got[id] != v {
-				t.Errorf("%s: puerta %d = %v, quiero %v", c.nombre, id, got[id], v)
+		for id := 0; id <= maxDoorID; id++ {
+			v, ok := visto[id]
+			if !ok {
+				t.Errorf("valor %v: la puerta %d quedó sin configurar", valor, id)
+				continue
+			}
+			if v != valor {
+				t.Errorf("valor %v: la puerta %d quedó en %v", valor, id, v)
 			}
 		}
 	}
 }
 
-func TestResolveDoorBoolsExplicita(t *testing.T) {
-	// El caso que motivó la sintaxis: configurar solo la puerta 1, sin relleno.
-	got, err := resolveDoorBools("zeroOpenState", []string{"1=true"})
-	if err != nil {
-		t.Fatalf("error inesperado: %s", err)
+// TestApplyDoorBoolPosicional fija la forma que ya está en campo: dos o más apariciones
+// siguen siendo posicionales y NO se expanden a todas las puertas. Es la única manera de
+// darle un valor distinto a cada puerta.
+func TestApplyDoorBoolPosicional(t *testing.T) {
+	visto := map[int]bool{}
+	applyDoorBool([]bool{false, true}, func(id int, v bool) { visto[id] = v })
+
+	if len(visto) != 2 {
+		t.Fatalf("se configuraron %d puertas, quiero 2: %v", len(visto), visto)
 	}
-	if len(got) != 1 || !got[1] {
-		t.Fatalf("solo la puerta 1 = %v, quiero {1:true}", got)
-	}
-	// La puerta 0 NO queda configurada: se deja el default del actor en vez de inventar
-	// un false que nadie pidió.
-	if _, ok := got[0]; ok {
-		t.Error("la puerta 0 no debería quedar configurada")
+	if visto[0] || !visto[1] {
+		t.Errorf("resultado %v, quiero {0:false, 1:true}", visto)
 	}
 
-	got, err = resolveDoorBools("zeroOpenState", []string{"1=TRUE", "0=False"})
-	if err != nil {
-		t.Fatalf("error inesperado: %s", err)
-	}
-	if got[0] || !got[1] {
-		t.Errorf("fuera de orden = %v, quiero {0:false, 1:true}", got)
+	// Tres valores distintos, para que quede claro que no hay expansión ni recorte.
+	visto = map[int]bool{}
+	applyDoorBool([]bool{true, false, true}, func(id int, v bool) { visto[id] = v })
+	if len(visto) != 3 || !visto[0] || visto[1] || !visto[2] {
+		t.Errorf("tres valores = %v, quiero {0:true, 1:false, 2:true}", visto)
 	}
 }
 
-func TestResolveDoorBoolsErrores(t *testing.T) {
+// TestZeroFlagsSet fija la manga ancha histórica del parseo: cualquier cosa distinta de
+// TRUE es false, sin avisar. Hay equipos en campo dependiendo de esto desde 1.0.25.
+func TestZeroFlagsSet(t *testing.T) {
 	casos := []struct {
-		nombre string
-		in     []string
+		in     string
+		quiero bool
 	}{
-		{"mezcla de formas", []string{"true", "1=true"}},
-		{"mezcla al revés", []string{"0=true", "false"}},
-		// En la forma explícita un typo es error, no un false silencioso: es sintaxis
-		// nueva y no hay compatibilidad que conservar.
-		{"typo en el valor", []string{"1=tru"}},
-		{"valor vacío", []string{"1="}},
-		{"id no numérico", []string{"trasera=true"}},
-		{"id fuera de rango", []string{"99=true"}},
-		{"id negativo", []string{"-1=true"}},
-		{"id repetido", []string{"1=true", "1=false"}},
+		{"true", true},
+		{"TRUE", true},
+		{"TrUe", true},
+		{"false", false},
+		{"", false},
+		{"tru", false},
+		{"sí", false},
+		{"1", false},
 	}
 	for _, c := range casos {
-		if _, err := resolveDoorBools("zeroOpenState", c.in); err == nil {
-			t.Errorf("%s: resolveDoorBools(%v) no devolvió error", c.nombre, c.in)
+		var z zeroFlags
+		if err := z.Set(c.in); err != nil {
+			t.Errorf("Set(%q) devolvió error: %s", c.in, err)
+			continue
+		}
+		if len(z) != 1 || z[0] != c.quiero {
+			t.Errorf("zeroFlags.Set(%q) = %v, quiero [%v]", c.in, z, c.quiero)
+		}
+
+		var cl closeFlags
+		if err := cl.Set(c.in); err != nil {
+			t.Errorf("closeFlags.Set(%q) devolvió error: %s", c.in, err)
+			continue
+		}
+		if len(cl) != 1 || cl[0] != c.quiero {
+			t.Errorf("closeFlags.Set(%q) = %v, quiero [%v]", c.in, cl, c.quiero)
 		}
 	}
 }
 
-func TestDescribeDoorBools(t *testing.T) {
-	if got := describeDoorBools(nil); got != "sin configurar (default)" {
-		t.Errorf("nil = %q", got)
+func TestDescribeDoorBool(t *testing.T) {
+	if got := describeDoorBool([]bool{true}); got != "true (todas las puertas)" {
+		t.Errorf("un valor = %q", got)
 	}
-	if got := describeDoorBools(map[int]bool{1: true}); got != "puerta 1 = true" {
-		t.Errorf("una puerta = %q", got)
-	}
-	// El orden tiene que ser estable aunque venga de un mapa.
 	quiero := "puerta 0 = false, puerta 1 = true"
-	if got := describeDoorBools(map[int]bool{1: true, 0: false}); got != quiero {
-		t.Errorf("dos puertas = %q, quiero %q", got, quiero)
+	if got := describeDoorBool([]bool{false, true}); got != quiero {
+		t.Errorf("dos valores = %q, quiero %q", got, quiero)
 	}
 }
 

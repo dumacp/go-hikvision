@@ -6,101 +6,74 @@ import (
 	"strings"
 )
 
-// doorBoolFlags collects the occurrences of -zeroOpenState y -countWithCloseDoor verbatim,
-// para poder distinguir después las dos formas aceptadas:
-//
-//	-zeroOpenState=true      posicional: la n-ésima aparición es la puerta n-1
-//	-zeroOpenState 1=true    explícita: el id va escrito
-//
-// El valor se guarda crudo en vez de convertirlo acá, porque la conversión depende de la
-// forma: la posicional tiene que conservar la manga ancha histórica —cualquier cosa distinta
-// de TRUE es false— y la explícita no.
-type doorBoolFlags []string
+// zeroFlags y closeFlags recogen las apariciones de -zeroOpenState y -countWithCloseDoor.
+// La sintaxis no cambió nunca: un booleano por aparición, y cualquier valor distinto de
+// TRUE (case-insensitive) es false.
+type zeroFlags []bool
 
-func (i *doorBoolFlags) String() string {
+func (i *zeroFlags) String() string {
 	return fmt.Sprintf("%v", *i)
 }
 
-func (i *doorBoolFlags) Set(value string) error {
-	*i = append(*i, strings.TrimSpace(value))
+func (i *zeroFlags) Set(value string) error {
+	if len(value) > 0 && strings.ToUpper(value) == "TRUE" {
+		*i = append(*i, true)
+	} else {
+		*i = append(*i, false)
+	}
 	return nil
 }
 
-// resolveDoorBools resuelve las ocurrencias a un mapa por puerta.
-//
-// Mismo criterio que resolveCameras: mezclar las dos formas es error, no un intento de
-// adivinar. `name` es el nombre del flag, solo para que el mensaje diga cuál falló.
-//
-// La diferencia con resolveCameras está en la manga ancha de la forma posicional: ahí
-// cualquier valor distinto de TRUE es false, sin avisar, porque así se comporta desde 1.0.25
-// y hay equipos en campo dependiendo de eso. En la forma explícita, en cambio, un valor que
-// no sea true o false es error: es sintaxis nueva y no hay nada que conservar, y un
-// `1=tru` que quedara en false en silencio es justo el error que se está tratando de evitar.
-func resolveDoorBools(name string, raw []string) (map[int]bool, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	var explicitas int
-	for _, v := range raw {
-		if strings.Contains(v, "=") {
-			explicitas++
-		}
-	}
-	out := make(map[int]bool, len(raw))
+type closeFlags []bool
 
-	switch {
-	case explicitas == 0:
-		for id, v := range raw {
-			if id > maxDoorID {
-				return nil, fmt.Errorf("-%s tiene %d apariciones, más que las %d puertas "+
-					"admitidas", name, len(raw), maxDoorID+1)
-			}
-			out[id] = strings.EqualFold(v, "TRUE")
-		}
-		return out, nil
-	case explicitas != len(raw):
-		return nil, fmt.Errorf("-%s mezcla las dos formas: %v. Usá todas con id explícito "+
-			"(id=valor) o todas posicionales, no una mezcla", name, raw)
-	}
-
-	for _, v := range raw {
-		corte := strings.Index(v, "=")
-		texto, valor := v[:corte], v[corte+1:]
-		id, err := strconv.Atoi(texto)
-		if err != nil {
-			return nil, fmt.Errorf("-%s %q: %q no es un id de puerta", name, v, texto)
-		}
-		if id < 0 || id > maxDoorID {
-			return nil, fmt.Errorf("-%s %q: el id de puerta %d está fuera de 0..%d",
-				name, v, id, maxDoorID)
-		}
-		if _, ok := out[id]; ok {
-			return nil, fmt.Errorf("-%s repite el id de puerta %d", name, id)
-		}
-		switch {
-		case strings.EqualFold(valor, "true"):
-			out[id] = true
-		case strings.EqualFold(valor, "false"):
-			out[id] = false
-		default:
-			return nil, fmt.Errorf("-%s %q: %q no es true ni false", name, v, valor)
-		}
-	}
-	return out, nil
+func (i *closeFlags) String() string {
+	return fmt.Sprintf("%v", *i)
 }
 
-// describeDoorBools arma la línea del banner. Imprime el id de cada puerta, porque el slice
-// crudo `[false true]` esconde justamente el índice, que es lo único que importa acá.
-func describeDoorBools(m map[int]bool) string {
-	if len(m) == 0 {
-		return "sin configurar (default)"
+func (i *closeFlags) Set(value string) error {
+	if len(value) > 0 && strings.ToUpper(value) == "TRUE" {
+		*i = append(*i, true)
+	} else {
+		*i = append(*i, false)
 	}
-	partes := make([]string, 0, len(m))
-	// Se recorre por id y no por el mapa, para que la línea salga siempre en el mismo orden.
-	for id := 0; id <= maxDoorID; id++ {
-		if v, ok := m[id]; ok {
-			partes = append(partes, fmt.Sprintf("puerta %d = %v", id, v))
+	return nil
+}
+
+// applyDoorBool aplica un switch por puerta al actor.
+//
+// **Una sola aparición aplica a TODAS las puertas**, no solo a la 0. Es la regla que hace
+// falta: estos switches describen cómo está cableado el vehículo —si el estado "abierta"
+// llega como 0 o como 1— y eso no cambia entre la puerta delantera y la trasera. Con la
+// regla posicional pura, un equipo con solo la cámara trasera y un único
+// `-zeroOpenState=true` configuraba la puerta 0 mientras los eventos caían en la 1, que
+// quedaba con el default; y no daba error, solo descartaba conteos.
+//
+// Dos o más apariciones siguen siendo posicionales: la n-ésima configura la puerta n-1. Esa
+// es la forma de darle un valor distinto a cada puerta y no cambia.
+func applyDoorBool(values []bool, set func(id int, v bool)) {
+	if len(values) == 1 {
+		// Se llenan todas las puertas modelables y no solo 0 y 1, para que agregar una
+		// tercera no reviva el mismo error en silencio.
+		for id := 0; id <= maxDoorID; id++ {
+			set(id, values[0])
 		}
+		return
+	}
+	for id, v := range values {
+		set(id, v)
+	}
+}
+
+// describeDoorBool arma la línea del banner. Con un solo valor dice que va a todas las
+// puertas, porque el `[true]` crudo no dejaba ver a cuál aplicaba — que era justamente la
+// parte que se malinterpretaba.
+func describeDoorBool(values []bool) string {
+	if len(values) == 1 {
+		return fmt.Sprintf("%v (todas las puertas)", values[0])
+	}
+	partes := make([]string, 0, len(values))
+	for id, v := range values {
+		partes = append(partes, fmt.Sprintf("puerta %d = %v", id, v))
 	}
 	return strings.Join(partes, ", ")
 }

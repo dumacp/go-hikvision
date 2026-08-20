@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.35"
+	showVersion = "1.0.36"
 )
 
 var debug bool
@@ -47,8 +47,8 @@ var videoGop int
 var rebootStart string
 var rebootEnd string
 
-var isZeroOpenState doorBoolFlags
-var enableCountWithCloseDoor doorBoolFlags
+var isZeroOpenState zeroFlags
+var enableCountWithCloseDoor closeFlags
 var cameras cameraFlags
 
 func init() {
@@ -61,11 +61,11 @@ func init() {
 	flag.BoolVar(&encryptCreds, "encryptCredentials", false,
 		"read user and password from stdin (one per line) and print the "+envCredentials+" value")
 	flag.Var(&isZeroOpenState, "zeroOpenState",
-		"is Zero the open state of a door? As \"door=bool\" (e.g. 1=true). Without the \"door=\" "+
-			"prefix it is positional and the n-th occurrence is door n-1; the two forms cannot "+
-			"be mixed")
+		"is Zero the open state? A single occurrence applies to ALL doors; two or more are "+
+			"positional and the n-th configures door n-1")
 	flag.Var(&enableCountWithCloseDoor, "countWithCloseDoor",
-		"count while the door is closed? Same \"door=bool\" or positional forms as -zeroOpenState")
+		"enable count with close door? Same rule as -zeroOpenState: one occurrence covers "+
+			"every door, two or more are positional")
 	flag.Var(&cameras, "camera",
 		"camera address of a door, as \"ip:door\" (e.g. 192.168.188.21:1). Without the \":door\" "+
 			"suffix it is positional and the n-th occurrence is door n-1; the two forms cannot "+
@@ -173,25 +173,15 @@ func main() {
 
 	rootContext := actor.NewActorSystem().Root
 
-	// Sin apariciones se deja la puerta 0 en false explícitamente, como venía haciendo el
-	// binario desde 1.0.25. El resto de las puertas queda con el default del actor.
-	if len(isZeroOpenState) == 0 {
-		isZeroOpenState = doorBoolFlags{"false"}
+	if len(isZeroOpenState) <= 0 {
+		isZeroOpenState = []bool{false}
 	}
-	if len(enableCountWithCloseDoor) == 0 {
-		enableCountWithCloseDoor = doorBoolFlags{"false"}
-	}
-	zeroOpenByDoor, err := resolveDoorBools("zeroOpenState", isZeroOpenState)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	countCloseByDoor, err := resolveDoorBools("countWithCloseDoor", enableCountWithCloseDoor)
-	if err != nil {
-		log.Fatalln(err)
+	if len(enableCountWithCloseDoor) <= 0 {
+		enableCountWithCloseDoor = []bool{false}
 	}
 
-	fmt.Printf("zeroOpenState: %s\n", describeDoorBools(zeroOpenByDoor))
-	fmt.Printf("countWithCloseDoor: %s\n", describeDoorBools(countCloseByDoor))
+	fmt.Printf("zeroOpenState: %s\n", describeDoorBool(isZeroOpenState))
+	fmt.Printf("countWithCloseDoor: %s\n", describeDoorBool(enableCountWithCloseDoor))
 	if len(camerasByDoor) > 0 {
 		fmt.Printf("cameras: %s\n", describeCameras(camerasByDoor))
 	} else {
@@ -200,12 +190,8 @@ func main() {
 	}
 
 	counting := client.NewCountingActor()
-	for id, v := range zeroOpenByDoor {
-		counting.SetZeroOpenState(id, v)
-	}
-	for id, v := range countCloseByDoor {
-		counting.SetCountCloseDoor(id, v)
-	}
+	applyDoorBool(isZeroOpenState, counting.SetZeroOpenState)
+	applyDoorBool(enableCountWithCloseDoor, counting.SetCountCloseDoor)
 	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).
 		SetLogBuild(buildlog)
 	if debug {
