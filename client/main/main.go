@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.32"
+	showVersion = "1.0.33"
 )
 
 var debug bool
@@ -39,6 +39,13 @@ var ntpInterval time.Duration
 var ntpTimeZone string
 var ntpDriftMax time.Duration
 var cameraCheckInterval time.Duration
+var recordStart string
+var recordEnd string
+var smartCodec string
+var videoFrameRate int
+var videoGop int
+var rebootStart string
+var rebootEnd string
 
 var isZeroOpenState zeroFlags
 var enableCountWithCloseDoor closeFlags
@@ -82,6 +89,37 @@ func init() {
 		"drift tolerated before reporting a camera clock as off")
 	flag.DurationVar(&cameraCheckInterval, "cameraCheckInterval", 30*time.Minute,
 		"how often the camera time and NTP configuration is checked")
+	// Un evento fuera de la ventana de grabación no tiene video posible: la cámara
+	// verificada venía con 07:55-16:02 y dejaba media jornada sin nada que extraer. No
+	// conviene 24/7 sin pensarlo: con 507 kbps medidos, una SD de 8 GB da 1.4 días de
+	// retención grabando todo el día contra 1.7 grabando veinte horas. La palanca real de
+	// la retención es el tamaño de la tarjeta, no el horario.
+	flag.StringVar(&recordStart, "recordStart", "04:00:00",
+		"start of the camera recording window, camera local time; empty leaves it as is")
+	flag.StringVar(&recordEnd, "recordEnd", "23:59:00",
+		"end of the recording window; the camera rounds to the minute, so :59 becomes :00")
+	// SmartCodec (H.264+) es lo que dejaba los clips congelados: con escena quieta la
+	// cámara grababa un keyframe cada varios segundos. Medido: 49 frames con un hueco de
+	// 5.7s activo, contra 201 continuos apagado. Vacío deja la cámara como esté, porque
+	// tocar el encoder obliga a reiniciar.
+	flag.StringVar(&smartCodec, "smartCodec", "",
+		"\"off\" to disable H.264+ (recommended when extracting video), \"on\" to enable it; "+
+			"empty leaves it as is")
+	flag.IntVar(&videoFrameRate, "videoFrameRate", 0,
+		"frames per second for the main stream; 0 leaves it as is (ISAPI stores centi-fps)")
+	flag.IntVar(&videoGop, "videoGop", 0,
+		"GOP length in frames; 0 leaves it as is. A shorter GOP means finer seeking")
+	// La ventana no es solo cuándo reiniciar: es cuándo se ESCRIBE el encoder. Un cambio que
+	// responde statusCode 7 queda guardado pero inerte, y la cámara reporta el valor guardado.
+	// Escribirlo fuera de la ventana y reiniciar el binario antes de que llegue dejaría a la
+	// cámara grabando con el ajuste viejo mientras el API dice lo contrario. Así que sin
+	// ventana no se escribe el encoder: solo se avisa qué falta.
+	flag.StringVar(&rebootStart, "rebootStart", "",
+		"start of the maintenance window where the encoder profile is written and the camera "+
+			"rebooted if needed; empty writes nothing and only warns")
+	flag.StringVar(&rebootEnd, "rebootEnd", "",
+		"end of the maintenance window; 00:30:00-03:30:00 sits inside the gap left by the "+
+			"default recording schedule")
 }
 
 func main() {
@@ -182,20 +220,39 @@ func main() {
 		warnlog.Printf("camera time maintenance disabled: -ntpServer is set but %s is not usable",
 			envCredentials)
 	default:
-		cam := client.NewCameraActor(cameras, camUser, camPass, client.NTPConfig{
-			Server:   ntpServer,
-			Port:     ntpPort,
-			Interval: ntpInterval,
-			TimeZone: ntpTimeZone,
-			DriftMax: ntpDriftMax,
+		cam := client.NewCameraActor(cameras, camUser, camPass, client.CameraConfig{
+			Server:      ntpServer,
+			Port:        ntpPort,
+			Interval:    ntpInterval,
+			TimeZone:    ntpTimeZone,
+			DriftMax:    ntpDriftMax,
+			RecordStart: recordStart,
+			RecordEnd:   recordEnd,
+			SmartCodec:  smartCodec,
+			FrameRate:   videoFrameRate,
+			GopFrames:   videoGop,
+			RebootStart: rebootStart,
+			RebootEnd:   rebootEnd,
 		}, cameraCheckInterval)
 		cam.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 		if debug {
 			cam.WithDebug()
 		}
 		counting.SetCameraProps(actor.PropsFromProducer(func() actor.Actor { return cam }))
-		infolog.Printf("camera time maintenance enabled: ntp=%s:%d every %v, zone=%q, driftMax=%v, check=%v",
-			ntpServer, ntpPort, ntpInterval, ntpTimeZone, ntpDriftMax, cameraCheckInterval)
+		infolog.Printf("camera time maintenance enabled: ntp=%s:%d every %v, zone=%q, driftMax=%v, check=%v, recording %s-%s",
+			ntpServer, ntpPort, ntpInterval, ntpTimeZone, ntpDriftMax, cameraCheckInterval,
+			recordStart, recordEnd)
+		// El perfil del encoder se anuncia aparte porque es el único que puede terminar en
+		// un reinicio, y conviene ver en el log de arranque si eso está habilitado o no.
+		if len(smartCodec) > 0 || videoFrameRate > 0 || videoGop > 0 {
+			ventana := "sin ventana de mantenimiento: NO escribe, solo avisa"
+			if len(rebootStart) > 0 && len(rebootEnd) > 0 {
+				ventana = fmt.Sprintf("escribe entre %s y %s y reinicia si hace falta",
+					rebootStart, rebootEnd)
+			}
+			infolog.Printf("encoder profile: smartCodec=%q fps=%d gop=%d (%s)",
+				smartCodec, videoFrameRate, videoGop, ventana)
+		}
 	}
 
 	propsCounting := actor.PropsFromProducer(func() actor.Actor { return counting }, actor.WithReceiverMiddleware(persistence.Using(provider)))

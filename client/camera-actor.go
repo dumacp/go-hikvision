@@ -27,8 +27,8 @@ const (
 	cameraDriftCycles = 3
 )
 
-// NTPConfig es la configuración de hora que se quiere en toda la flota.
-type NTPConfig struct {
+// CameraConfig es la configuración que se quiere en toda la flota de cámaras.
+type CameraConfig struct {
 	Server string
 	Port   int
 	// Interval es cada cuánto la cámara sincroniza. La API lo expresa en minutos.
@@ -39,6 +39,49 @@ type NTPConfig struct {
 	TimeZone string
 	// DriftMax es la deriva tolerada antes de alarmar.
 	DriftMax time.Duration
+
+	// RecordStart y RecordEnd son la ventana de grabación deseada, en HH:MM:SS de la hora
+	// local de la cámara. Vacías dejan el horario como esté.
+	//
+	// Importa porque un evento fuera de la ventana no tiene video posible: la cámara de
+	// laboratorio venía con 07:55-16:02 y dejaba media jornada sin nada que extraer. Y no
+	// conviene poner 24/7 sin pensar: con 507 kbps medidos, una SD de 8 GB da 1.4 días de
+	// retención grabando todo el día contra 1.7 grabando veinte horas. La palanca real de
+	// la retención es el tamaño de la tarjeta, no el horario.
+	RecordStart string
+	RecordEnd   string
+
+	// SmartCodec pide "on", "off" o vacío para dejarlo como esté. Es el ajuste que más
+	// importa para el video: con H.264+ activo y escena quieta la cámara graba un keyframe
+	// cada varios segundos y el clip parece congelado. Medido en la cámara de laboratorio:
+	// 49 frames con un hueco de 5.7 s contra 201 continuos al desactivarlo.
+	SmartCodec string
+	// FrameRate en fps y GopFrames en cuadros; cero deja el valor como esté. ISAPI guarda
+	// los fps en centi-fps, la conversión la hace el actor.
+	FrameRate int
+	GopFrames int
+
+	// RebootStart y RebootEnd son la ventana horaria del equipo en que se permite
+	// reiniciar una cámara, en HH:MM:SS. Vacías significan **no reiniciar nunca**: solo
+	// avisar, que es el comportamiento anterior.
+	//
+	// El perfil de codificación es el único cambio que la cámara aplica con statusCode 7,
+	// o sea "guardado, falta reiniciar". Y el reinicio no es gratis: corta unos 70 segundos
+	// de grabación —pedir un instante del hueco devuelve 500— y durante el arranque la
+	// cámara no envía eventos, así que los pasajeros que cruzan en esa ventana no se
+	// cuentan. Por eso se hace en la franja sin servicio, no cuando el ciclo lo descubre.
+	RebootStart string
+	RebootEnd   string
+}
+
+// wantsEncoder indica si hay algo que alinear en el perfil de codificación.
+func (c CameraConfig) wantsEncoder() bool {
+	return len(c.SmartCodec) > 0 || c.FrameRate > 0 || c.GopFrames > 0
+}
+
+// rebootAllowed indica si se configuró una ventana de reinicio.
+func (c CameraConfig) rebootAllowed() bool {
+	return len(c.RebootStart) > 0 && len(c.RebootEnd) > 0
 }
 
 // CameraActor mantiene la configuración de hora de las cámaras y avisa cuando una deriva.
@@ -52,7 +95,7 @@ type CameraActor struct {
 	cameras  []string
 	user     string
 	pass     string
-	want     NTPConfig
+	want     CameraConfig
 	interval time.Duration
 
 	state   map[int32]*camTimeState
@@ -66,13 +109,31 @@ type camTimeState struct {
 	// driftCycles cuenta ciclos consecutivos fuera de tolerancia.
 	driftCycles int
 	alerted     bool
+	// storageAlerted evita repetir la alarma del almacenamiento en cada ciclo.
+	storageAlerted bool
 	// unauthorized deja de intentar: la cámara bloquea el usuario tras varios fallos y
 	// reintentar cada ciclo con una credencial mala la deja inaccesible en campo.
 	unauthorized bool
+	// rebooted limita a UN reinicio por cámara por arranque del binario.
+	//
+	// Sin este tope, un modelo que acepta el PUT pero no lo persiste dejaría el ciclo
+	// viendo la misma diferencia para siempre: escribir, statusCode 7, reiniciar, cada
+	// media hora y en toda la flota. Un reinicio que no arregla nada es un problema para
+	// mirar en el log, no algo para repetir solo.
+	rebooted bool
+	// rebootWarned evita repetir en cada ciclo el aviso de "hay cambios sin aplicar".
+	rebootWarned bool
 }
 
 // msgCameraTick dispara un ciclo de revisión.
 type msgCameraTick struct{}
+
+// msgRebootDone informa el resultado de un reinicio pedido a una cámara.
+type msgRebootDone struct {
+	door int32
+	host string
+	err  error
+}
 
 // msgCameraResult trae el resultado de una cámara desde la goroutine al actor.
 type msgCameraResult struct {
@@ -96,10 +157,30 @@ type msgCameraResult struct {
 	rebootRequired bool
 	err            error
 	unauthorized   bool
+
+	// storage describe el medio de grabación. storageOK falso es la condición que hace
+	// imposible extraer cualquier clip, así que se reporta aparte de los errores.
+	storageOK      bool
+	storageStatus  string
+	storageFreeMB  int
+	storageChecked bool
+
+	// codec describe lo observado en el perfil de codificación. codecType se reporta y
+	// nunca se escribe: video/extract.go solo sabe H.264, así que cambiarlo a H.265 desde
+	// acá rompería la extracción en silencio; que quede en el evento y lo decida un humano.
+	codecChecked bool
+	codecType    string
+	codecFPS     float64
+	smartCodec   bool
+	// encoderErr se reporta aparte de err: un fallo acá no invalida lo demás del ciclo.
+	encoderErr error
+	// encoderPending son las diferencias medidas y NO escritas, porque el ciclo cayó fuera
+	// de la ventana de reinicio (o no hay ventana). Sirven para avisar qué falta aplicar.
+	encoderPending []string
 }
 
 // NewCameraActor crea el actor.
-func NewCameraActor(cameras []string, user, pass string, want NTPConfig, interval time.Duration) *CameraActor {
+func NewCameraActor(cameras []string, user, pass string, want CameraConfig, interval time.Duration) *CameraActor {
 	if interval <= 0 {
 		interval = 30 * time.Minute
 	}
@@ -136,6 +217,18 @@ func (a *CameraActor) Receive(ctx actor.Context) {
 
 	case *msgCameraResult:
 		a.handleResult(ctx, msg)
+
+	case *msgRebootDone:
+		// Un error acá no reabre el candado: si el PUT falló pero la cámara igual se
+		// reinició, insistir la reiniciaría dos veces. Queda en el log y se revisa.
+		if msg.err != nil {
+			a.errLog.Printf("no se pudo reiniciar la cámara de la puerta %d (%s): %s; "+
+				"el cambio queda pendiente hasta el próximo arranque del binario",
+				msg.door, msg.host, msg.err)
+			return
+		}
+		a.infoLog.Printf("cámara de la puerta %d (%s) reiniciada; vuelve a enviar eventos "+
+			"cuando termine de arrancar", msg.door, msg.host)
 	}
 }
 
@@ -184,12 +277,26 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 		time.Duration(len(trabajos))*4*cameraHTTPTimeout)
 	a.cancel = cancel
 
-	a.buildLog.Printf("ciclo de hora sobre %d cámara(s), referencia %s", len(trabajos), refFuente)
+	// El perfil de codificación se escribe SOLO dentro de la ventana de reinicio, y por eso
+	// se decide acá, en el hilo del actor, junto con el resto del ciclo.
+	//
+	// La razón no es prudencia sino corrección: un cambio que responde statusCode 7 queda
+	// **guardado pero inerte**, y la cámara reporta el valor guardado, no el efectivo. Si se
+	// escribiera fuera de la ventana y el binario reiniciara antes de que llegue —supervisión,
+	// despliegue—, el ciclo siguiente leería el valor nuevo, no vería diferencia, y nadie
+	// reiniciaría nunca: la cámara seguiría grabando con el ajuste viejo mientras la
+	// configuración y la lectura del API coinciden en decir lo contrario. Escribiendo dentro
+	// de la ventana, el PUT y el reinicio pasan en el mismo ciclo y no queda estado a medias.
+	escribirEncoder := a.want.wantsEncoder() && a.want.rebootAllowed() &&
+		withinWindow(time.Now(), a.want.RebootStart, a.want.RebootEnd)
+
+	a.buildLog.Printf("ciclo de hora sobre %d cámara(s), referencia %s (encoder: escribe=%v)",
+		len(trabajos), refFuente, escribirEncoder)
 
 	go func() {
 		defer cancel()
 		for _, t := range trabajos {
-			res := a.checkCamera(cctx, t.door, t.host, ref)
+			res := a.checkCamera(cctx, t.door, t.host, ref, escribirEncoder)
 			system.Root.Send(self, res)
 		}
 		// Una marca final para liberar el candado, con door negativo.
@@ -246,7 +353,8 @@ func gpsTime(frame string) (time.Time, error) {
 }
 
 // checkCamera revisa y corrige una cámara. No escribe el reloj nunca.
-func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, ref time.Time) *msgCameraResult {
+func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, ref time.Time,
+	escribirEncoder bool) *msgCameraResult {
 	res := &msgCameraResult{door: door, host: host}
 	cli := isapi.New(host, a.user, a.pass, cameraHTTPTimeout)
 
@@ -329,6 +437,45 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 		}
 	}
 
+	// Horario de grabación. Se aplica en caliente: verificado que responde statusCode 1 y
+	// queda activo sin reiniciar, a diferencia de la configuración del encoder.
+	if len(a.want.RecordStart) > 0 && len(a.want.RecordEnd) > 0 {
+		if raw, err := cli.GetTrackRaw(ctx, videoTrack); err != nil {
+			res.err = fmt.Errorf("leyendo el horario de grabación: %w", err)
+			res.unauthorized = errors.Is(err, isapi.ErrUnauthorized)
+			return res
+		} else if nuevo, cambios, err := isapi.SetScheduleWindow(raw, a.want.RecordStart, a.want.RecordEnd); err != nil {
+			res.err = fmt.Errorf("armando el horario: %w", err)
+			return res
+		} else if cambios > 0 {
+			if err := cli.PutTrackRaw(ctx, videoTrack, nuevo); err != nil {
+				res.err = fmt.Errorf("escribiendo el horario de grabación: %w", err)
+				res.unauthorized = errors.Is(err, isapi.ErrUnauthorized)
+				return res
+			}
+			res.fixed = append(res.fixed, fmt.Sprintf("horario de grabación -> %s a %s (%d ventana(s))",
+				a.want.RecordStart, a.want.RecordEnd, cambios))
+		}
+	}
+
+	// Almacenamiento. No se formatea nunca: borra todo lo grabado y esa no es una decisión
+	// para un binario, igual que el reinicio. Solo se reporta, porque una SD sin formatear
+	// hace que ningún clip se pueda extraer y sin este aviso se culparía al extractor.
+	if st, err := cli.GetStorage(ctx); err == nil && len(st.HDDs) > 0 {
+		h := st.HDDs[0]
+		res.storageChecked = true
+		res.storageOK = h.Healthy()
+		res.storageStatus = h.Status
+		res.storageFreeMB = h.FreeSpace
+	}
+
+	// Perfil de codificación. Va al final a propósito: es el único cambio que exige
+	// reiniciar, así que si algo falló antes no se llega a pedir un reinicio por una cámara
+	// que además tiene otro problema.
+	if a.want.wantsEncoder() {
+		a.checkEncoder(ctx, cli, res, escribirEncoder)
+	}
+
 	// El test del servidor solo cuando hay deriva: distingue "problema de red" de
 	// "problema de reloj", y no hay razón para molestar a la cámara si todo está en hora.
 	if res.driftOK && abs(res.drift) > a.want.DriftMax && len(res.server) > 0 {
@@ -354,6 +501,101 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 		}
 	}
 	return res
+}
+
+// checkEncoder alinea el perfil de codificación del canal principal.
+//
+// Con escribir en falso solo mide la diferencia y la deja en res.encoderPending: es lo que
+// pasa fuera de la ventana de reinicio, y también cuando no hay ventana configurada. Ver
+// runCycle para el porqué —escribir fuera de la ventana puede dejar la cámara con un ajuste
+// guardado pero inerte y sin nadie que la reinicie.
+//
+// Un error acá NO aborta el ciclo: la hora, el NTP, el horario y el almacenamiento ya
+// quedaron revisados, y el perfil es lo menos urgente de los cinco. Se anota como
+// advertencia en el resultado y sigue.
+func (a *CameraActor) checkEncoder(ctx context.Context, cli *isapi.Client, res *msgCameraResult,
+	escribir bool) {
+	// La lectura tipada es solo para reportar; los cambios van sobre el XML crudo, porque
+	// el documento trae transporte, multicast, audio y overlays, y reconstruirlo desde un
+	// struct con los campos que interesan borraría todo lo demás.
+	if enc, err := cli.GetChannelEncoder(ctx, videoTrack); err == nil {
+		res.codecChecked = true
+		res.codecType = enc.Video.CodecType
+		res.codecFPS = enc.FrameRate()
+		res.smartCodec = enc.Video.SmartCodec.Enabled
+	}
+
+	raw, err := cli.GetChannelRaw(ctx, videoTrack)
+	if err != nil {
+		res.encoderErr = fmt.Errorf("leyendo el perfil de codificación: %w", err)
+		res.unauthorized = res.unauthorized || errors.Is(err, isapi.ErrUnauthorized)
+		return
+	}
+
+	var cambios []string
+	if quiero, ok := smartCodecWanted(a.want.SmartCodec); ok {
+		if nuevo, cambio, err := isapi.SetSmartCodec(raw, quiero); err != nil {
+			res.encoderErr = fmt.Errorf("armando SmartCodec: %w", err)
+			return
+		} else if cambio {
+			raw = nuevo
+			cambios = append(cambios, fmt.Sprintf("SmartCodec -> %v", quiero))
+		}
+	}
+	// ISAPI guarda los fps en centi-fps: 2000 son 20 fps. Confundirlo lleva a creer que la
+	// cámara graba a 2000 fps y a escribir un valor absurdo.
+	if a.want.FrameRate > 0 {
+		if nuevo, cambio, err := isapi.SetVideoField(raw, "maxFrameRate",
+			fmt.Sprintf("%d", a.want.FrameRate*100)); err != nil {
+			res.encoderErr = fmt.Errorf("armando maxFrameRate: %w", err)
+			return
+		} else if cambio {
+			raw = nuevo
+			cambios = append(cambios, fmt.Sprintf("maxFrameRate -> %d fps", a.want.FrameRate))
+		}
+	}
+	if a.want.GopFrames > 0 {
+		if nuevo, cambio, err := isapi.SetVideoField(raw, "GovLength",
+			fmt.Sprintf("%d", a.want.GopFrames)); err != nil {
+			res.encoderErr = fmt.Errorf("armando GovLength: %w", err)
+			return
+		} else if cambio {
+			raw = nuevo
+			cambios = append(cambios, fmt.Sprintf("GovLength -> %d cuadros", a.want.GopFrames))
+		}
+	}
+	if len(cambios) == 0 {
+		return
+	}
+	if !escribir {
+		res.encoderPending = cambios
+		return
+	}
+
+	if err := cli.PutChannelRaw(ctx, videoTrack, raw); err != nil {
+		if !rebootRequired(err) {
+			res.encoderErr = fmt.Errorf("escribiendo el perfil de codificación: %w", err)
+			res.unauthorized = res.unauthorized || errors.Is(err, isapi.ErrUnauthorized)
+			return
+		}
+		// statusCode 7 no es un fallo: el cambio quedó guardado y hace falta reiniciar
+		// para que tome efecto. Medido, y depende del CAMPO, no del endpoint: GovLength y
+		// maxFrameRate responden 1 y se aplican en caliente; SmartCodec responde 7.
+		res.rebootRequired = true
+	}
+	res.fixed = append(res.fixed, "codificación: "+strings.Join(cambios, ", "))
+}
+
+// smartCodecWanted traduce el flag a un booleano. El segundo valor es falso cuando no hay
+// nada pedido, que es lo que deja la cámara como esté.
+func smartCodecWanted(v string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true", "1", "enabled":
+		return true, true
+	case "off", "false", "0", "disabled":
+		return false, true
+	}
+	return false, false
 }
 
 // wantedServer devuelve la lista a escribir si la actual difiere, o nil si ya está bien.
@@ -392,7 +634,7 @@ func (a *CameraActor) describeNTPFix(actual *isapi.NTPServer) string {
 		a.want.Server, a.want.Port, int(a.want.Interval.Minutes()))
 }
 
-func describeTimeFix(modo, zona bool, tm *isapi.Time, want NTPConfig) string {
+func describeTimeFix(modo, zona bool, tm *isapi.Time, want CameraConfig) string {
 	var partes []string
 	if modo {
 		partes = append(partes, fmt.Sprintf("timeMode %s -> NTP", tm.TimeMode))
@@ -436,9 +678,62 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 	for _, f := range res.fixed {
 		a.infoLog.Printf("cámara de la puerta %d (%s) corregida: %s", res.door, res.host, f)
 	}
+	if res.encoderErr != nil {
+		a.warnLog.Printf("cámara de la puerta %d (%s), perfil de codificación: %s",
+			res.door, res.host, res.encoderErr)
+	}
+	if res.codecChecked {
+		a.buildLog.Printf("cámara de la puerta %d: codec %s, %.0f fps, SmartCodec %v",
+			res.door, res.codecType, res.codecFPS, res.smartCodec)
+		// El codec se reporta pero no se cambia: video/extract.go solo sabe H.264, así que
+		// una cámara en H.265 va a fallar la extracción por más que todo lo demás esté bien.
+		if len(res.codecType) > 0 && !strings.EqualFold(res.codecType, "H.264") {
+			a.warnLog.Printf("cámara de la puerta %d (%s) codifica en %q; la extracción de "+
+				"video solo maneja H.264 y va a fallar. Cambialo en la cámara",
+				res.door, res.host, res.codecType)
+		}
+	}
+	// Lo que se midió pero no se escribió, porque el ciclo no cayó en la ventana. Se avisa
+	// una vez por cámara para no repetirlo cada media hora.
+	if len(res.encoderPending) > 0 && !st.rebootWarned {
+		st.rebootWarned = true
+		if a.want.rebootAllowed() {
+			a.infoLog.Printf("cámara de la puerta %d (%s): %s pendiente(s), se aplican en la "+
+				"ventana %s-%s", res.door, res.host, strings.Join(res.encoderPending, ", "),
+				a.want.RebootStart, a.want.RebootEnd)
+		} else {
+			// Sin ventana no se escribe NADA: dejar el ajuste guardado pero inerte es peor
+			// que no tocarlo, porque la lectura del API diría que está aplicado.
+			a.warnLog.Printf("cámara de la puerta %d (%s): %s sin aplicar. Hace falta "+
+				"-rebootStart/-rebootEnd, porque el cambio puede exigir reiniciar la cámara",
+				res.door, res.host, strings.Join(res.encoderPending, ", "))
+		}
+	}
+	if len(res.encoderPending) == 0 {
+		st.rebootWarned = false
+	}
+
+	// El reinicio se decide en el mismo ciclo que escribió, no después: acá ya se sabe que
+	// el ciclo cayó dentro de la ventana, porque si no, no se habría escrito.
 	if res.rebootRequired {
-		a.warnLog.Printf("cámara de la puerta %d (%s) pide reinicio para aplicar el cambio; "+
-			"no se reinicia sola, decidilo vos", res.door, res.host)
+		a.considerReboot(ctx, res, st)
+	}
+
+	// El almacenamiento se reporta antes que la deriva: sin medio de grabación no hay
+	// video para ningún evento, y es un problema más grave que un reloj corrido.
+	if res.storageChecked {
+		if !res.storageOK && !st.storageAlerted {
+			st.storageAlerted = true
+			a.errLog.Printf("cámara de la puerta %d (%s): almacenamiento en %q, no está grabando. "+
+				"Ningún clip se va a poder extraer hasta que se formatee (no lo hace este binario)",
+				res.door, res.host, res.storageStatus)
+			a.publish(ctx, res, st, "storage")
+		} else if res.storageOK && st.storageAlerted {
+			st.storageAlerted = false
+			a.infoLog.Printf("cámara de la puerta %d (%s): almacenamiento recuperado (%q, %d MB libres)",
+				res.door, res.host, res.storageStatus, res.storageFreeMB)
+			a.publish(ctx, res, st, "storage_ok")
+		}
 	}
 
 	if !res.driftOK {
@@ -472,9 +767,71 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 			res.door, res.drift.Seconds(), res.mode, res.server, res.interval)
 	}
 
-	if len(res.fixed) > 0 {
+	// El "fixed" se omite si ya salió un "reboot": los dos llevarían el mismo arreglo en
+	// `fixed` y la plataforma vería dos mensajes para un solo cambio. El "reboot" es el más
+	// informativo de los dos, porque además dice que la cámara se va a caer un momento.
+	if len(res.fixed) > 0 && !res.rebootRequired {
 		a.publish(ctx, res, st, "fixed")
 	}
+}
+
+// considerReboot reinicia la cámara que acaba de responder statusCode 7.
+//
+// Solo se llega acá desde un ciclo que ya escribió, y solo se escribe dentro de la ventana:
+// la ventana **no se vuelve a comprobar**. Volver a comprobarla podría dejar el cambio ya
+// escrito pero sin reiniciar —guardado e inerte, el peor estado— si el ciclo cruzara el borde
+// entre el PUT y esta decisión.
+//
+// Corre en el hilo del actor, que es donde vive el estado, y por eso puede marcar `rebooted`
+// antes de lanzar la petición: el candado se cierra sin carrera. El PUT en sí va en una
+// goroutine porque tarda y Receive no puede bloquearse.
+func (a *CameraActor) considerReboot(ctx actor.Context, res *msgCameraResult, st *camTimeState) {
+	if st.rebooted {
+		a.errLog.Printf("cámara de la puerta %d (%s) volvió a pedir reinicio DESPUÉS de haberse "+
+			"reiniciado: el cambio no quedó guardado. No se reinicia otra vez; revisá si el "+
+			"modelo acepta ese ajuste", res.door, res.host)
+		return
+	}
+
+	st.rebooted = true
+	st.rebootWarned = false
+	a.warnLog.Printf("reiniciando la cámara de la puerta %d (%s) para aplicar el perfil de "+
+		"codificación; va a dejar de grabar y de contar durante el arranque",
+		res.door, res.host)
+	a.publish(ctx, res, st, "reboot")
+
+	self, system := ctx.Self(), ctx.ActorSystem()
+	door, host := res.door, res.host
+	user, pass := a.user, a.pass
+	go func() {
+		cctx, cancel := context.WithTimeout(context.Background(), cameraHTTPTimeout)
+		defer cancel()
+		err := isapi.New(host, user, pass, cameraHTTPTimeout).Reboot(cctx)
+		system.Root.Send(self, &msgRebootDone{door: door, host: host, err: err})
+	}()
+}
+
+// withinWindow indica si t está en la franja [start, end) en hora local del equipo.
+// Soporta ventanas que cruzan la medianoche, como 22:00:00-04:00:00.
+func withinWindow(t time.Time, start, end string) bool {
+	ini, err1 := secondsOfDay(start)
+	fin, err2 := secondsOfDay(end)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	ahora := t.Hour()*3600 + t.Minute()*60 + t.Second()
+	if ini <= fin {
+		return ahora >= ini && ahora < fin
+	}
+	return ahora >= ini || ahora < fin
+}
+
+func secondsOfDay(v string) (int, error) {
+	t, err := time.Parse("15:04:05", v)
+	if err != nil {
+		return 0, err
+	}
+	return t.Hour()*3600 + t.Minute()*60 + t.Second(), nil
 }
 
 // publish avisa a la plataforma. Se publica solo en los cambios de estado: una línea por
@@ -495,6 +852,15 @@ func (a *CameraActor) publish(ctx actor.Context, res *msgCameraResult, st *camTi
 		NTPIntervalM int      `json:"ntp_interval_min,omitempty"`
 		NTPReachable *bool    `json:"ntp_reachable,omitempty"`
 		Fixed        []string `json:"fixed,omitempty"`
+		// Storage solo va cuando se pudo consultar el medio de grabación.
+		Storage       string `json:"storage,omitempty"`
+		StorageFreeMB int    `json:"storage_free_mb,omitempty"`
+		// Codec describe el perfil observado. Va en el evento para que la plataforma pueda
+		// detectar de lejos una cámara en H.265 o con SmartCodec activo, que son las dos
+		// condiciones que dejan un clip inservible aunque la extracción "funcione".
+		VideoCodec string  `json:"video_codec,omitempty"`
+		VideoFPS   float64 `json:"video_fps,omitempty"`
+		SmartCodec *bool   `json:"smart_codec,omitempty"`
 	}{
 		ID: res.door, Type: "CAMERA", Status: estado,
 		Camera: res.host, CameraSerial: st.serial,
@@ -505,6 +871,16 @@ func (a *CameraActor) publish(ctx actor.Context, res *msgCameraResult, st *camTi
 	if res.ntpTested {
 		v := res.ntpReachable
 		val.NTPReachable = &v
+	}
+	if res.storageChecked {
+		val.Storage = res.storageStatus
+		val.StorageFreeMB = res.storageFreeMB
+	}
+	if res.codecChecked {
+		val.VideoCodec = res.codecType
+		val.VideoFPS = res.codecFPS
+		v := res.smartCodec
+		val.SmartCodec = &v
 	}
 	data, err := json.Marshal(&pubsub.Message{
 		Timestamp: float64(time.Now().UnixNano()) / 1000000000,

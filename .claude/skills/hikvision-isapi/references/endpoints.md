@@ -329,6 +329,28 @@ El precio es **x2.6 en bitrate**: 228 MB/hora, y la retención de una SD de 7695
 a **4.2 días** con un horario de 8 h diarias (1.4 días si fuera 24/7). Sigue siendo cómodo para
 extraer poco después del evento, pero hay que tenerlo en cuenta al dimensionar la tarjeta.
 
+### Qué escritura exige reiniciar y qué no
+
+Medido en el DS-2XM6825G0 (V5.5.850). Importa porque decide si un cambio se puede aplicar en
+servicio o hay que esperar la franja de mantenimiento:
+
+| Endpoint | Respuesta al PUT | ¿Reinicio? |
+|---|---|---|
+| `/ISAPI/System/time` | `statusCode 1` | no, en caliente |
+| `/ISAPI/System/time/ntpServers` | `statusCode 1` | no, en caliente |
+| `/ISAPI/ContentMgmt/record/tracks/101` | `statusCode 1`, activo al leerlo de vuelta | no, en caliente |
+| `/ISAPI/Streaming/channels/101` | **`statusCode 7`** `Reboot Required` | **sí**, inerte hasta reiniciar |
+
+El binario lo refleja: el perfil del encoder es lo último que revisa cada ciclo, y el reinicio va
+detrás de tres condiciones (ventana horaria configurada, estar dentro de ella, y no haber
+reiniciado ya esa cámara en esta corrida). Sin `-rebootStart`/`-rebootEnd` no reinicia nunca.
+
+Dos trampas del `<Video>` de este endpoint:
+
+- **`maxFrameRate` va en centi-fps**: `2000` son 20 fps. Escribir `20` deja la cámara a 0.2 fps.
+- **`videoCodecType` no se toca desde el binario.** `video/extract.go` solo maneja H.264; poner
+  H.265 rompe la extracción en silencio. Se reporta en el evento `CAMERATIME` y se deja WARN.
+
 ### Eventos individuales: el API no los tiene
 
 `POST .../counting/search` devuelve agregados, con granularidad mínima de un cuarto de hora

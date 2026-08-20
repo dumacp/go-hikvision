@@ -109,15 +109,29 @@ Tres cosas que hay que entender de este mensaje antes de tocarlo:
 cuando detecta que su reloj derivó:
 
 ```json
-{"timestamp":1787238867.212,"type":"CAMERATIME",
- "value":{"id":0,"type":"CAMERA","status":"fixed","camera":"192.168.186.91",
-          "camera_serial":"DS-2XM6825G0/C-IVS20221126AAWRK97545100","drift_s":0,
+{"timestamp":1787258987.460,"type":"CAMERATIME",
+ "value":{"id":0,"type":"CAMERA","status":"reboot","camera":"192.168.186.91",
+          "camera_serial":"DS-2XM6825G0/C-IVS20221126AAWRK97545100","drift_s":-0.7,
           "time_mode":"NTP","ntp_server":"ntp2.inm.gov.co","ntp_interval_min":60,
-          "fixed":["NTP ntp2.inm.gov.co:123 cada 1500 min -> ntp2.inm.gov.co:123 cada 60 min"]}}
+          "fixed":["codificación: SmartCodec -> false"],
+          "storage":"ok","storage_free_mb":2304,
+          "video_codec":"H.264","video_fps":20,"smart_codec":true}}
 ```
 
 - `status` es `fixed` (se corrigió algo), `drift` (el reloj derivó más de `-timeDriftMax` durante
-  tres ciclos) o `ok` (volvió a hora después de haber alarmado).
+  tres ciclos), `ok` (volvió a hora después de haber alarmado), `storage` / `storage_ok` (el medio
+  de grabación dejó de servir o se recuperó) o `reboot` (se está reiniciando la cámara para
+  aplicar el perfil de codificación).
+- **`reboot` y `fixed` no salen los dos por el mismo cambio.** Cuando hay reinicio se publica solo
+  `reboot`, que lleva el mismo arreglo en `fixed` y además avisa que la cámara se va a caer un
+  momento. Dos mensajes para un cambio obligarían al consumidor a deduplicar.
+- **`video_codec`, `video_fps` y `smart_codec` son lo OBSERVADO al revisar, antes de corregir.**
+  En el ejemplo `smart_codec: true` con `fixed: [... -> false]` significa "estaba en true, lo
+  dejamos en false"; el valor efectivo es el de `fixed`. Sirven para detectar de lejos una cámara
+  en H.265 —que rompe la extracción, porque `video/extract.go` solo maneja H.264— o con H.264+
+  activo, que deja los clips congelados.
+- `storage` y `storage_free_mb` (en MB) aparecen cuando se pudo consultar el medio. `storage`
+  distinto de `ok` es la condición que hace imposible extraer **cualquier** clip.
 - `ntp_reachable` aparece **solo cuando hubo deriva**: el test del servidor se consulta nada más
   en ese caso, para distinguir problema de red de problema de reloj. Su ausencia no significa
   que el servidor esté mal.
