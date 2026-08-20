@@ -1,17 +1,9 @@
 {
   "permissions": {
-    "defaultMode": "dontAsk",
-    "deny": [
-      "Bash(sudo:*)",
-      "Bash(rm -rf:*)",
-      "Bash(rm -fr:*)",
-      "Bash(dd:*)",
-      "Bash(mkfs:*)",
-      "Bash(git push:*)",
-      "Bash(git reset --hard:*)",
-      "Bash(git clean:*)"
-    ],
     "allow": [
+      "Edit(//home/duma/go/src/github.com/dumacp/go-hikvision/**)",
+      "Edit(//home/duma/go/src/github.com/dumacp/clipscamera/**)",
+      "Edit(//home/duma/go/src/github.com/dumacp/go-actors/**)",
       "Bash(go build:*)",
       "Bash(go vet:*)",
       "Bash(go test:*)",
@@ -84,8 +76,32 @@
       "Read(//home/duma/**)",
       "Bash(ping -c1 -W2 192.168.186.91)",
       "Bash(pkill -x hik)",
-      "Bash(rm -rf /tmp/countingdb-enc /tmp/ch101*.xml /tmp/after.xml)"
+      "Bash(rm -rf /tmp/countingdb-enc /tmp/ch101*.xml /tmp/after.xml)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-test -camera= -camera 192.168.188.21)",
+      "Bash(gofmt -w client/main/flag.go client/main/flag_test.go client/main/main.go)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-t1 -camera 192.168.188.21:1)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-t2 -camera 192.168.188.21:8080)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-t3 -camera 10.0.0.1 -camera 10.0.0.2:1)",
+      "Bash(git log *)",
+      "Bash(grep -iE \"service|systemd|deploy|install|\\\\.sh$|\\\\.conf$|Makefile\")",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-b1 -zeroOpenState=false -zeroOpenState=true)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-b2 -zeroOpenState=true)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-b3 -camera 192.168.188.21:1 -zeroOpenState 1=true -countWithCloseDoor 1=false)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-b4 -zeroOpenState 1=tru)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-c1 -zeroOpenState=true)",
+      "Bash(timeout 3 /tmp/hik -logStd -socket :8099 -pathdb /tmp/cdb-c2 -zeroOpenState=false -zeroOpenState=true)"
     ],
+    "deny": [
+      "Bash(sudo:*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(dd:*)",
+      "Bash(mkfs:*)",
+      "Bash(git push:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)"
+    ],
+    "defaultMode": "auto",
     "additionalDirectories": [
       "/home/duma/go/src/github.com/dumacp/go-hikvision/.claude/skills/hikvision-isapi"
     ]
