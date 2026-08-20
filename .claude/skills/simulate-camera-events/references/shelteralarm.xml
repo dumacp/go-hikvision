@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EventNotificationAlert version="1.0" xmlns="urn:psialliance-org">
+<ipAddress>192.168.188.21</ipAddress>
+<protocolType>HTTP</protocolType>
+<macAddress>84:9a:40:ec:f1:6d</macAddress>
+<channelID>1</channelID>
+<dateTime>__DATETIME__</dateTime>
+<activePostCount>1</activePostCount>
+<eventType>shelteralarm</eventType>
+<eventState>active</eventState>
+<eventDescription>shelteralarm alarm</eventDescription>
+<channelName>Camera 01</channelName>
+</EventNotificationAlert>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EventNotificationAlert version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+<ipAddress>192.168.188.21</ipAddress>
+<protocolType>HTTP</protocolType>
+<macAddress>84:9a:40:ec:f1:6d</macAddress>
+<channelID>1</channelID>
+<dateTime>__DATETIME__</dateTime>
+<activePostCount>1</activePostCount>
+<eventType>PeopleCounting</eventType>
+<eventState>active</eventState>
+<eventDescription>peopleCounting alarm</eventDescription>
+<channelName>Camera 01</channelName>
+<peopleCounting>
+<statisticalMethods>signalTrigger</statisticalMethods>
+<TimeRange>
+<startTime>__DATETIME__</startTime>
+<endTime>__DATETIME__</endTime>
+</TimeRange>
+<enter>__ENTER__</enter>
+<exit>__EXIT__</exit>
+<pass>0</pass>
+<duplicatePeople>0</duplicatePeople>
+</peopleCounting>
+<childCounting>
+<enter>0</enter>
+<exit>0</exit>
+</childCounting>
+</EventNotificationAlert>

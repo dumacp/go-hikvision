@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(go vet:*)",
+      "Bash(go test:*)",
+      "Bash(go list:*)",
+      "Bash(go doc:*)",
+      "Bash(go env:*)",
+      "Bash(go version)",
+      "Bash(gofmt:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git blame:*)",
+      "Bash(git branch:*)",
+      "Bash(ss -lntp:*)",
+      "Bash(mosquitto_sub:*)",
+      "Bash(gofmt -w client/camera-actor.go)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(gofmt -l client/camera-actor.go client/counting-actor.go client/main/main.go)",
+      "Bash(/tmp/hikvision -help)",
+      "Bash(pkill -x hikvision)",
+      "Bash(pkill -x sniff)",
+      "Bash(python3 -)",
+      "Edit(/.claude/skills/mqtt-contract/**)",
+      "Bash(cd /home/duma/go/src/github.com/dumacp/go-hikvision *)",
+      "Edit(/.claude/skills/hikvision-isapi/**)",
+      "Bash(git diff *)",
+      "Bash(git add *)",
+      "Bash(cat)",
+      "Bash(git commit *)"
+    ],
+    "additionalDirectories": [
+      "/home/duma/go/src/github.com/dumacp/go-hikvision/.claude/skills/hikvision-isapi"
+    ]
+  }
+}
