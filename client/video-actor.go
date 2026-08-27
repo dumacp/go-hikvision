@@ -63,6 +63,9 @@ type VideoActor struct {
 	tickPend bool
 	// clockWarned evita repetir el aviso de relojes desfasados en cada evento.
 	clockWarned bool
+	// lastEvent recuerda la hora del último evento de cada puerta, para saber si los
+	// pasajeros que cuenta un evento caben en la ventana del clip.
+	lastEvent map[int32]time.Time
 
 	// camInfo cachea la identidad de cada cámara por puerta. No cambia, así que se
 	// consulta una sola vez y no en cada extracción.
@@ -134,6 +137,7 @@ func NewVideoActor(cameras []string, user, pass, dir string, preRoll, duration t
 		maxQueue: maxQueue,
 	}
 	a.camInfo = make(map[int32]camIdent)
+	a.lastEvent = make(map[int32]time.Time)
 	// Un error acá no es motivo para deshabilitar nada: el campo queda vacío.
 	a.hostname, _ = os.Hostname()
 	a.Logger = &Logger{}
@@ -234,10 +238,36 @@ func (a *VideoActor) enqueue(ctx actor.Context, msg *messages.Event) {
 			a.maxQueue, msg.GetID(), time.Unix(msg.GetTimestamp(), 0).Format(time.RFC3339))
 		return
 	}
+	when := time.Unix(msg.GetTimestamp(), 0)
+
+	// Un evento puede traer más de un pasajero, y entonces el clip no siempre los muestra
+	// todos. La cámara manda acumulados, así que el incremento es la diferencia contra el
+	// último visto: si el binario estuvo un rato sin recibir eventos —recién arrancado, o la
+	// cámara sin alcanzarlo— ese incremento junta cruces repartidos en minutos, y el clip
+	// cubre solo el último. Medido en campo: un evento con 8 pasajeros sobre un clip donde
+	// se ve una persona.
+	//
+	// Se distinguen por el tiempo desde el evento anterior de esa puerta: si el anterior es
+	// más viejo que el inicio del clip, los cruces que cuenta este evento empezaron antes de
+	// lo grabado. Sin evento anterior —el primero tras arrancar— se asume lo mismo.
+	//
+	// El conteo publicado es correcto en los dos casos; lo que avisa esto es que el video no
+	// alcanza a respaldarlo, para que nadie lea el clip como si mostrara los N pasajeros.
+	if msg.GetValue() > 1 {
+		previo, hubo := a.lastEvent[msg.GetID()]
+		if !hubo || previo.Before(when.Add(-a.preRoll)) {
+			a.warnLog.Printf("el evento de la puerta %d trae %d pasajeros pero el clip "+
+				"arranca en %s: los cruces anteriores a ese instante no quedaron grabados. "+
+				"El conteo es correcto, el video cubre solo el final",
+				msg.GetID(), msg.GetValue(), when.Add(-a.preRoll).Format("15:04:05"))
+		}
+	}
+	a.lastEvent[msg.GetID()] = when
+
 	a.pending = append(a.pending, videoJob{
 		door:    msg.GetID(),
 		tipo:    msg.GetType(),
-		when:    time.Unix(msg.GetTimestamp(), 0),
+		when:    when,
 		counter: msg.GetValue(),
 		uid:     msg.GetUid(),
 	})

@@ -421,7 +421,20 @@ El archivo de datos de cada evento:
 - **`clip_start_requested` es el instante pedido, no el primer cuadro.** La cámara posiciona la
   reproducción en el cuadro completo anterior, así que el video puede empezar hasta un GOP antes.
   Da más pre-roll que el configurado, nunca menos. Lo mismo vale para `offset_s`.
-- **`camera_counter` es el incremento de este evento**, no el acumulado.
+- **`camera_counter` es el incremento de este evento**, no el acumulado. **Puede ser mayor a 1**,
+  y entonces el clip no siempre muestra a todos: la cámara manda acumulados, así que si el binario
+  estuvo un rato sin recibir eventos —recién arrancado, o la cámara sin alcanzarlo— ese incremento
+  junta cruces repartidos en minutos y el clip cubre solo el último. El conteo es correcto en los
+  dos casos; cuando el video no alcanza a respaldarlo el binario deja un WARN:
+
+  ```
+  el evento de la puerta 1 trae 8 pasajeros pero el clip arranca en 11:39:50: los cruces
+  anteriores a ese instante no quedaron grabados. El conteo es correcto, el video cubre
+  solo el final
+  ```
+
+  Cuando los pasajeros cruzan juntos —dos personas con segundos de diferencia— entran los dos en
+  la ventana y no hay aviso.
 - **`max_gap_s` y `fps_effective`** permiten juzgar si el clip sirve sin abrirlo.
 
 El clip y cada archivo de datos se escriben como `.part` y se **renombran al terminar**. El rename

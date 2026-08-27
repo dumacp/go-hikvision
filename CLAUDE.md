@@ -278,7 +278,11 @@ Cuatro precisiones que evitan malinterpretarlo:
   `isapi.GetDeviceInfo` y quedan en caché. Si esa consulta falla los campos van vacíos pero **la
   extracción sigue**: el clip vale más que su metadato. Son la identidad estable del equipo,
   mientras `camera` es la IP y cambia con el direccionamiento.
-- **`camera_counter` es el incremento de este evento**, casi siempre `1`, no el acumulado.
+- **`camera_counter` es el incremento de este evento**, casi siempre `1`, no el acumulado. Cuando
+  es mayor, `VideoActor` compara contra la hora del evento anterior de esa puerta (`lastEvent`) y
+  deja WARN si los cruces empezaron antes del inicio del clip — el caso del binario recién
+  arrancado, donde el acumulado de la cámara avanzó mientras nadie escuchaba. El conteo sigue
+  siendo correcto; lo que avisa es que el video no alcanza a respaldarlo.
 - **`max_gap_s` y `fps_effective` dicen si el clip se ve fluido o congelado, sin abrirlo.** A
   20 fps lo normal es un hueco de 0.05 s. Medido en la misma cámara y la misma escena quieta:
   con H.264+ apagado, **241 fotos en 12 s y hueco de 83 ms**; encendido, **2 fotos en 12 s y
