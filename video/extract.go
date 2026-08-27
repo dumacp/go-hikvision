@@ -24,8 +24,10 @@ import (
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/pmp4"
 	"github.com/pion/rtp"
@@ -61,6 +63,10 @@ type Result struct {
 	Duration time.Duration
 	Bytes    int64
 	Elapsed  time.Duration
+	// Codec es el que la cámara entregó para ESTE tramo: "H.264" o "H.265". Puede diferir
+	// de lo configurado hoy en la cámara, porque la SD conserva grabaciones anteriores a un
+	// cambio de codec.
+	Codec string
 	// MaxGap es el intervalo más largo entre dos fotos consecutivas del clip.
 	//
 	// Es la medida de si el clip se ve fluido o congelado, y sirve para juzgarlo sin abrirlo.
@@ -106,6 +112,105 @@ type sample struct {
 // Extract descarga el tramo y escribe el MP4. La reproducción va a tiempo real: un
 // recorte de diez segundos tarda unos diez segundos, así que ctx debe traer un plazo
 // holgado y es quien corta si la cámara deja de responder.
+// flujoCodec aísla lo único que cambia entre H.264 y H.265. Todo el resto del recorte
+// —conexión, SETUP, PLAY, acumulación de muestras y escritura del MP4— es idéntico.
+//
+// Se soportan los dos porque la SD puede tener grabaciones de antes y de después de un
+// cambio de codec en la cámara: el extractor toma lo que la cámara ofrezca para ese tramo,
+// no lo que esté configurado ahora.
+type flujoCodec struct {
+	nombre string
+	medi   *description.Media
+	forma  format.Format
+	// decode arma un access unit a partir de un paquete RTP.
+	decode func(*rtp.Packet) ([][]byte, error)
+	// dts devuelve el instante de decodificación del access unit.
+	dts func(au [][]byte, pts int64) (int64, error)
+	// sync indica si el access unit es un punto de entrada, o sea un keyframe.
+	sync func(au [][]byte) bool
+	// sniff se queda con los parameter sets que vengan en banda: los de la SDP pueden no
+	// coincidir con los del tramo grabado.
+	sniff func(au [][]byte)
+	// mp4 arma el descriptor del track con los parameter sets vistos hasta ahora.
+	mp4 func() codecs.Codec
+}
+
+// nuevoFlujo elige el codec según lo que la cámara ofrezca en la SDP. Devuelve nil si no
+// hay ninguno de los dos.
+func nuevoFlujo(desc *description.Session) (*flujoCodec, error) {
+	var f264 *format.H264
+	if medi := desc.FindFormat(&f264); medi != nil {
+		dec, err := f264.CreateDecoder()
+		if err != nil {
+			return nil, fmt.Errorf("video: decoder RTP H.264: %w", err)
+		}
+		ex := h264.NewDTSExtractor()
+		ex.Initialize()
+		sps, pps := f264.SPS, f264.PPS
+		return &flujoCodec{
+			nombre: "H.264",
+			medi:   medi,
+			forma:  f264,
+			decode: dec.Decode,
+			dts:    ex.Extract,
+			sync:   h264.IsRandomAccess,
+			sniff: func(au [][]byte) {
+				for _, nalu := range au {
+					if len(nalu) == 0 {
+						continue
+					}
+					// En H.264 el tipo son los 5 bits bajos del primer byte.
+					switch h264.NALUType(nalu[0] & 0x1F) {
+					case h264.NALUTypeSPS:
+						sps = nalu
+					case h264.NALUTypePPS:
+						pps = nalu
+					}
+				}
+			},
+			mp4: func() codecs.Codec { return &codecs.H264{SPS: sps, PPS: pps} },
+		}, nil
+	}
+
+	var f265 *format.H265
+	if medi := desc.FindFormat(&f265); medi != nil {
+		dec, err := f265.CreateDecoder()
+		if err != nil {
+			return nil, fmt.Errorf("video: decoder RTP H.265: %w", err)
+		}
+		ex := h265.NewDTSExtractor()
+		ex.Initialize()
+		vps, sps, pps := f265.VPS, f265.SPS, f265.PPS
+		return &flujoCodec{
+			nombre: "H.265",
+			medi:   medi,
+			forma:  f265,
+			decode: dec.Decode,
+			dts:    ex.Extract,
+			sync:   h265.IsRandomAccess,
+			sniff: func(au [][]byte) {
+				for _, nalu := range au {
+					if len(nalu) == 0 {
+						continue
+					}
+					// H.265 corre el tipo un bit y usa 6 bits, no 5: es la trampa al
+					// portar el sniffing desde H.264.
+					switch h265.NALUType((nalu[0] >> 1) & 0x3F) {
+					case h265.NALUType_VPS_NUT:
+						vps = nalu
+					case h265.NALUType_SPS_NUT:
+						sps = nalu
+					case h265.NALUType_PPS_NUT:
+						pps = nalu
+					}
+				}
+			},
+			mp4: func() codecs.Codec { return &codecs.H265{VPS: vps, SPS: sps, PPS: pps} },
+		}, nil
+	}
+	return nil, errors.New("video: la cámara no ofrece un stream H.264 ni H.265")
+}
+
 func Extract(ctx context.Context, req Request) (*Result, error) {
 	if req.Duration <= 0 {
 		return nil, fmt.Errorf("video: duración inválida %v", req.Duration)
@@ -136,63 +241,44 @@ func Extract(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("video: DESCRIBE: %w", err)
 	}
-	var forma *format.H264
-	medi := desc.FindFormat(&forma)
-	if medi == nil {
-		return nil, errors.New("video: la cámara no ofrece un stream H264")
-	}
-	dec, err := forma.CreateDecoder()
+	flujo, err := nuevoFlujo(desc)
 	if err != nil {
-		return nil, fmt.Errorf("video: decoder RTP: %w", err)
+		return nil, err
 	}
-	dtsEx := h264.NewDTSExtractor()
-	dtsEx.Initialize()
 
 	var (
 		samples  []sample
 		firstDTS int64
 		haveDTS  bool
-		sps      = forma.SPS
-		pps      = forma.PPS
 		done     = make(chan struct{})
 		finished bool
 	)
 	wanted := int64(req.Duration.Seconds() * timeScale)
 
-	if _, err := c.Setup(desc.BaseURL, medi, 0, 0); err != nil {
+	if _, err := c.Setup(desc.BaseURL, flujo.medi, 0, 0); err != nil {
 		return nil, fmt.Errorf("video: SETUP: %w", err)
 	}
 
-	c.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
+	c.OnPacketRTP(flujo.medi, flujo.forma, func(pkt *rtp.Packet) {
 		if finished {
 			return
 		}
-		pts, ok := c.PacketPTS(medi, pkt)
+		pts, ok := c.PacketPTS(flujo.medi, pkt)
 		if !ok {
 			return
 		}
-		au, err := dec.Decode(pkt)
+		au, err := flujo.decode(pkt)
 		if err != nil {
 			// Un access unit repartido en varios paquetes no es un error.
 			return
 		}
-		// SPS/PPS en banda: quedarse con el último visto, porque el de la SDP puede
-		// no coincidir con el del tramo grabado.
-		for _, nalu := range au {
-			if len(nalu) == 0 {
-				continue
-			}
-			switch h264.NALUType(nalu[0] & 0x1F) {
-			case h264.NALUTypeSPS:
-				sps = nalu
-			case h264.NALUTypePPS:
-				pps = nalu
-			}
-		}
-		dts, err := dtsEx.Extract(au, int64(pts))
+		flujo.sniff(au)
+		dts, err := flujo.dts(au, int64(pts))
 		if err != nil {
 			return
 		}
+		// El empaquetado con longitud al frente es el mismo para los dos codecs: dentro
+		// de un MP4, H.265 usa la misma forma que H.264 (ISO 14496-15).
 		payload, err := h264.AVCC(au).Marshal()
 		if err != nil {
 			return
@@ -200,7 +286,7 @@ func Extract(ctx context.Context, req Request) (*Result, error) {
 		if !haveDTS {
 			firstDTS, haveDTS = dts, true
 		}
-		samples = append(samples, sample{dts: dts, pts: int64(pts), sync: h264.IsRandomAccess(au), payload: payload})
+		samples = append(samples, sample{dts: dts, pts: int64(pts), sync: flujo.sync(au), payload: payload})
 		if dts-firstDTS >= wanted {
 			finished = true
 			close(done)
@@ -223,16 +309,17 @@ func Extract(ctx context.Context, req Request) (*Result, error) {
 		return nil, ErrNoVideo
 	}
 
-	res, err := writeMP4(req.Dest, samples, sps, pps)
+	res, err := writeMP4(req.Dest, samples, flujo.mp4())
 	if err != nil {
 		return nil, err
 	}
+	res.Codec = flujo.nombre
 	res.Elapsed = time.Since(inicio)
 	return res, nil
 }
 
 // writeMP4 arma un MP4 progresivo y lo deja en dest mediante rename atómico.
-func writeMP4(dest string, samples []sample, sps, pps []byte) (*Result, error) {
+func writeMP4(dest string, samples []sample, codec codecs.Codec) (*Result, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return nil, fmt.Errorf("video: creando directorio: %w", err)
 	}
@@ -264,7 +351,7 @@ func writeMP4(dest string, samples []sample, sps, pps []byte) (*Result, error) {
 	pres := pmp4.Presentation{Tracks: []*pmp4.Track{{
 		ID:        1,
 		TimeScale: timeScale,
-		Codec:     &codecs.H264{SPS: sps, PPS: pps},
+		Codec:     codec,
 		Samples:   out,
 	}}}
 

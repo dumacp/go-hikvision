@@ -48,3 +48,55 @@ func TestCameraConfigGates(t *testing.T) {
 		t.Error("-videoGop debe habilitar la revisión del encoder")
 	}
 }
+
+func TestNormalizeVideoCodec(t *testing.T) {
+	ok := map[string]string{
+		"":       "",
+		"h264":   "H.264",
+		"H.264":  "H.264",
+		"264":    "H.264",
+		"avc":    "H.264",
+		"h265":   "H.265",
+		"H.265":  "H.265",
+		" H265 ": "H.265",
+		"hevc":   "H.265",
+	}
+	for in, quiero := range ok {
+		got, err := NormalizeVideoCodec(in)
+		if err != nil {
+			t.Errorf("NormalizeVideoCodec(%q) devolvió error: %s", in, err)
+			continue
+		}
+		if got != quiero {
+			t.Errorf("NormalizeVideoCodec(%q) = %q, quiero %q", in, got, quiero)
+		}
+	}
+	// Un typo tiene que detener el arranque, no quedar en "no pedido": si se ignora, la
+	// cámara sigue con el codec viejo mientras la configuración dice otra cosa.
+	for _, in := range []string{"h26", "h.2645", "vp9", "265h", "mjpeg"} {
+		if _, err := NormalizeVideoCodec(in); err == nil {
+			t.Errorf("NormalizeVideoCodec(%q) no devolvió error", in)
+		}
+	}
+}
+
+func TestNormalizeSmartCodec(t *testing.T) {
+	for _, in := range []string{"", "on", "off", "OFF", " on ", "true", "false", "0", "1"} {
+		if _, err := NormalizeSmartCodec(in); err != nil {
+			t.Errorf("NormalizeSmartCodec(%q) devolvió error: %s", in, err)
+		}
+	}
+	for _, in := range []string{"tru", "apagado", "sí", "enable"} {
+		if _, err := NormalizeSmartCodec(in); err == nil {
+			t.Errorf("NormalizeSmartCodec(%q) no devolvió error", in)
+		}
+	}
+}
+
+// TestCameraConfigCodecGate verifica que pedir solo el codec ya habilite la revisión del
+// encoder, sin necesidad de pasar además smartCodec o fps.
+func TestCameraConfigCodecGate(t *testing.T) {
+	if !(CameraConfig{VideoCodec: "H.265"}).wantsEncoder() {
+		t.Error("-videoCodec debe habilitar la revisión del encoder")
+	}
+}

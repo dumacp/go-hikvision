@@ -73,11 +73,32 @@ type CameraConfig struct {
 	// los fps en centi-fps, la conversión la hace el actor.
 	FrameRate int
 	GopFrames int
+	// VideoCodec pide "H.264", "H.265" o vacío para dejarlo como esté.
+	//
+	// Medido en la misma cámara y la misma escena, con fixedQuality 40: H.265 sin H.264+
+	// da 28.2 KB/s contra 42.9 de H.264 sin H.264+, y bajando a 12 fps queda en 16.7 —
+	// más chico que los 25.9 de H.264+ y con el cruce siempre visible. El `+` era lo que
+	// compraba tamaño a costa de no grabar; H.265 lo compra comprimiendo.
+	//
+	// Se escribe en caliente, statusCode 1, sin reiniciar. A diferencia de SmartCodec.
+	VideoCodec string
+	// Quality es el fixedQuality de ISAPI: la calidad en modo VBR. Cero deja el valor como
+	// esté. Es la palanca que de verdad manda el tamaño en esta cámara — más que el techo
+	// de bitrate, que viene en 8192 kbps y no ata nada cuando se graba a ~200.
+	//
+	// El modelo verificado admite 1, 20, 40, 60, 80 y 100, y **recorta en silencio** un
+	// valor fuera de esa lista respondiendo OK. Por eso el actor relee después de escribir.
+	Quality int
+	// BitrateMax es el vbrUpperCap de ISAPI, en kbps: el techo de bitrate. Cero deja el
+	// valor como esté. Sirve para acotar el peor caso de una escena con mucho movimiento,
+	// no para bajar el tamaño típico.
+	BitrateMax int
 }
 
 // wantsEncoder indica si hay algo que alinear en el perfil de codificación.
 func (c CameraConfig) wantsEncoder() bool {
-	return len(c.SmartCodec) > 0 || c.FrameRate > 0 || c.GopFrames > 0
+	return len(c.SmartCodec) > 0 || c.FrameRate > 0 || c.GopFrames > 0 ||
+		len(c.VideoCodec) > 0 || c.Quality > 0 || c.BitrateMax > 0
 }
 
 // CameraActor mantiene la configuración de hora de las cámaras y avisa cuando una deriva.
@@ -389,10 +410,13 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 		res.driftOK = true
 	}
 
-	// Configuración de hora: solo se escribe si difiere.
+	// Configuración de hora y NTP: se escribe solo si hay servidor configurado, porque el
+	// actor también existe cuando solo se pide el perfil de codificación. Sin -ntpServer la
+	// deriva se mide igual —es una lectura y sirve para el reporte— pero no se toca el reloj
+	// ni los servidores.
 	necesitaModo := !strings.EqualFold(tm.TimeMode, "NTP")
 	necesitaZona := len(a.want.TimeZone) > 0 && tm.TimeZone != a.want.TimeZone
-	if necesitaModo || necesitaZona {
+	if len(a.want.Server) > 0 && (necesitaModo || necesitaZona) {
 		nuevo := *tm
 		nuevo.TimeMode = "NTP"
 		if len(a.want.TimeZone) > 0 {
@@ -415,14 +439,15 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 		}
 	}
 
-	// Servidores NTP.
+	// Servidores NTP. La lectura se hace igual, para reportar con qué está configurada la
+	// cámara; la escritura la decide wantedServer, que devuelve nil sin -ntpServer.
+	var actual *isapi.NTPServer
 	lista, err := cli.GetNTPServers(ctx)
 	if err != nil {
 		res.err = fmt.Errorf("leyendo los servidores NTP: %w", err)
 		res.unauthorized = errors.Is(err, isapi.ErrUnauthorized)
 		return res
 	}
-	var actual *isapi.NTPServer
 	if len(lista.Servers) > 0 {
 		actual = &lista.Servers[0]
 		res.server = actual.Address()
@@ -626,6 +651,38 @@ func (a *CameraActor) encoderDiff(raw []byte) ([]byte, []string, error) {
 			cambios = append(cambios, fmt.Sprintf("maxFrameRate -> %d fps", a.want.FrameRate))
 		}
 	}
+	if len(a.want.VideoCodec) > 0 {
+		nuevo, cambio, err := isapi.SetVideoField(raw, "videoCodecType", a.want.VideoCodec)
+		if err != nil {
+			return nil, nil, fmt.Errorf("armando videoCodecType: %w", err)
+		}
+		if cambio {
+			raw = nuevo
+			cambios = append(cambios, "videoCodecType -> "+a.want.VideoCodec)
+		}
+	}
+	if a.want.Quality > 0 {
+		nuevo, cambio, err := isapi.SetVideoField(raw, "fixedQuality",
+			fmt.Sprintf("%d", a.want.Quality))
+		if err != nil {
+			return nil, nil, fmt.Errorf("armando fixedQuality: %w", err)
+		}
+		if cambio {
+			raw = nuevo
+			cambios = append(cambios, fmt.Sprintf("fixedQuality -> %d", a.want.Quality))
+		}
+	}
+	if a.want.BitrateMax > 0 {
+		nuevo, cambio, err := isapi.SetVideoField(raw, "vbrUpperCap",
+			fmt.Sprintf("%d", a.want.BitrateMax))
+		if err != nil {
+			return nil, nil, fmt.Errorf("armando vbrUpperCap: %w", err)
+		}
+		if cambio {
+			raw = nuevo
+			cambios = append(cambios, fmt.Sprintf("vbrUpperCap -> %d kbps", a.want.BitrateMax))
+		}
+	}
 	if a.want.GopFrames > 0 {
 		nuevo, cambio, err := isapi.SetVideoField(raw, "GovLength",
 			fmt.Sprintf("%d", a.want.GopFrames))
@@ -638,6 +695,34 @@ func (a *CameraActor) encoderDiff(raw []byte) ([]byte, []string, error) {
 		}
 	}
 	return raw, cambios, nil
+}
+
+// NormalizeVideoCodec traduce lo que venga del flag al valor exacto que espera ISAPI.
+// Devuelve error en cualquier otra cosa: es sintaxis nueva y un typo que se ignore en
+// silencio dejaría la cámara con el codec viejo mientras la configuración dice otra cosa.
+func NormalizeVideoCodec(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(v, ".", ""))) {
+	case "":
+		return "", nil
+	case "h264", "264", "avc":
+		return "H.264", nil
+	case "h265", "265", "hevc":
+		return "H.265", nil
+	}
+	return "", fmt.Errorf("codec de video %q no reconocido, se espera h264 o h265", v)
+}
+
+// NormalizeSmartCodec valida el flag de H.264+ al arrancar, por lo mismo: un typo que
+// quedara en "no pedido" dejaría la cámara con el ajuste viejo sin avisar, y eso es justo
+// lo que hace que un clip salga congelado sin que nadie sepa por qué.
+func NormalizeSmartCodec(v string) (string, error) {
+	if len(strings.TrimSpace(v)) == 0 {
+		return "", nil
+	}
+	if _, ok := smartCodecWanted(v); !ok {
+		return "", fmt.Errorf("smartCodec %q no reconocido, se espera on u off", v)
+	}
+	return v, nil
 }
 
 // smartCodecWanted traduce el flag a un booleano. El segundo valor es falso cuando no hay
@@ -739,13 +824,8 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 	if res.codecChecked {
 		a.buildLog.Printf("cámara de la puerta %d: codec %s, %.0f fps, SmartCodec %v",
 			res.door, res.codecType, res.codecFPS, res.smartCodec)
-		// El codec se reporta pero no se cambia: video/extract.go solo sabe H.264, así que
-		// una cámara en H.265 va a fallar la extracción por más que todo lo demás esté bien.
-		if len(res.codecType) > 0 && !strings.EqualFold(res.codecType, "H.264") {
-			a.warnLog.Printf("cámara de la puerta %d (%s) codifica en %q; la extracción de "+
-				"video solo maneja H.264 y va a fallar. Cambialo en la cámara",
-				res.door, res.host, res.codecType)
-		}
+		// El extractor maneja H.264 y H.265, así que ya no hay un codec "roto". Se sigue
+		// reportando en el evento para que la plataforma vea con qué graba cada cámara.
 	}
 	// Lo que se midió pero todavía no se escribió. Se avisa una vez por cámara para no
 	// repetirlo en cada ciclo.

@@ -29,6 +29,9 @@ const (
 	// cruce entre completo en el clip. Es lo que limita cuántos eventos seguidos
 	// pueden compartir una misma ventana.
 	videoMinPostRoll = 2 * time.Second
+	// videoClockSlack es el margen que se le da a la espera de asentamiento antes de
+	// declarar que los relojes no coinciden.
+	videoClockSlack = 30 * time.Second
 	// videoMaxGapWarn es el hueco entre fotos a partir del cual se avisa que el clip se va a
 	// ver congelado. A 20 fps lo normal es 0.05 s, y el caso malo medido con H.264+ fue de
 	// 5.7 s, así que un segundo queda holgado respecto del jitter normal y muy por debajo del
@@ -58,6 +61,8 @@ type VideoActor struct {
 	pending  []videoJob
 	working  bool
 	tickPend bool
+	// clockWarned evita repetir el aviso de relojes desfasados en cada evento.
+	clockWarned bool
 
 	// camInfo cachea la identidad de cada cámara por puerta. No cambia, así que se
 	// consulta una sola vez y no en cada extracción.
@@ -186,8 +191,9 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 			a.errLog.Printf("extrayendo video de la puerta %d (%s, %d evento(s)): %s",
 				anchor.door, anchor.when.Format(time.RFC3339), len(msg.group), msg.err)
 		default:
-			a.infoLog.Printf("video %s: %d muestras, %v, hueco máx %v, %d bytes en %v, %d evento(s) en la ventana",
-				filepath.Base(msg.dest), msg.res.Samples, msg.res.Duration.Round(time.Millisecond),
+			a.infoLog.Printf("video %s: %s, %d muestras, %v, hueco máx %v, %d bytes en %v, %d evento(s) en la ventana",
+				filepath.Base(msg.dest), msg.res.Codec, msg.res.Samples,
+				msg.res.Duration.Round(time.Millisecond),
 				msg.res.MaxGap.Round(time.Millisecond), msg.res.Bytes,
 				msg.res.Elapsed.Round(time.Millisecond), len(msg.group))
 			// Un hueco grande significa que la cámara dejó de emitir fotos, y el clip se ve
@@ -258,7 +264,30 @@ func (a *VideoActor) next(ctx actor.Context) {
 	// Además de ser necesario para que exista el video, deja que la cola se llene:
 	// agrupar al recibir el primer evento daría un grupo de uno solo, porque los pasos
 	// siguientes todavía no llegaron, y volverían los clips duplicados.
-	if espera := time.Until(hasta.Add(videoSettleDelay)); espera > 0 {
+	//
+	// Ojo con los dos relojes: `hasta` viene del evento, o sea del reloj de la CÁMARA,
+	// mientras time.Until mide contra el reloj del GATEWAY. Si no coinciden, la espera
+	// calculada no tiene sentido físico. Medido en campo: un gateway 19 meses atrasado
+	// respecto de la cámara producía una espera de 19 meses y no se extraía nada nunca,
+	// sin un solo error en el log — el conteo funcionaba y los clips simplemente no
+	// aparecían.
+	//
+	// El máximo físico de esta espera es preRoll + duration + settle. Más que eso solo
+	// puede venir de una diferencia de relojes, así que se acota y se avisa. Extraer de
+	// inmediato es seguro: la cámara indexa sus grabaciones con su propio reloj, que es
+	// el mismo del evento, y HasCoverage verifica la cobertura antes de pedir el tramo.
+	espera := time.Until(hasta.Add(videoSettleDelay))
+	if maxEspera := a.preRoll + a.duration + videoSettleDelay + videoClockSlack; espera > maxEspera {
+		if !a.clockWarned {
+			a.clockWarned = true
+			a.warnLog.Printf("el reloj del equipo y el de la cámara difieren en ~%v: la hora "+
+				"del evento (%s) está en el futuro para este equipo. Se extrae igual, pero "+
+				"revisá el reloj del gateway porque afecta el timestamp de los mensajes MQTT",
+				espera.Round(time.Minute), anchor.when.Format(time.RFC3339))
+		}
+		espera = 0
+	}
+	if espera > 0 {
 		if !a.tickPend {
 			a.tickPend = true
 			self, system := ctx.Self(), ctx.ActorSystem()
@@ -486,6 +515,9 @@ type sidecar struct {
 	// FPSEffective son las fotos por segundo que realmente trae el clip, que con H.264+ es
 	// bastante menor que los fps configurados en la cámara.
 	FPSEffective float64 `json:"fps_effective"`
+	// Codec es el que la cámara entregó para este tramo, no el que tiene configurado hoy:
+	// la SD conserva grabaciones de antes de un cambio de codec.
+	Codec string `json:"codec,omitempty"`
 }
 
 // fpsEfectivo son las fotos por segundo que trae el clip. Devuelve 0 si no se puede medir,
@@ -521,6 +553,7 @@ func writeSidecar(path string, job videoJob, gateway, host string, ident camIden
 		Bytes:           res.Bytes,
 		MaxGapS:         round2(res.MaxGap.Seconds()),
 		FPSEffective:    fpsEfectivo(res.Samples, res.Duration),
+		Codec:           res.Codec,
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

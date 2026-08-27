@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.36"
+	showVersion = "1.0.37"
 )
 
 var debug bool
@@ -42,8 +42,11 @@ var cameraCheckInterval time.Duration
 var recordStart string
 var recordEnd string
 var smartCodec string
+var videoCodec string
 var videoFrameRate int
 var videoGop int
+var videoQuality int
+var videoBitrateMax int
 
 var isZeroOpenState zeroFlags
 var enableCountWithCloseDoor closeFlags
@@ -110,10 +113,33 @@ func init() {
 	flag.StringVar(&smartCodec, "smartCodec", "",
 		"\"off\" to disable H.264+ (recommended when extracting video), \"on\" to enable it; "+
 			"empty leaves it as is")
+	// Medido en la misma cámara, misma escena, fixedQuality 40, ventana de 12 s:
+	//
+	//   H.264 con H.264+   25.9 KB/s   pero el clip sale congelado casi siempre
+	//   H.264 sin H.264+   42.9 KB/s   completo
+	//   H.265 sin H.264+   28.2 KB/s   completo
+	//   H.265 sin H.264+, 12 fps   16.7 KB/s   completo   <- el mejor de los dos mundos
+	//
+	// El extractor maneja los dos codecs, y la SD puede tener grabaciones de antes y
+	// después del cambio: cada clip se extrae con el codec que la cámara ofrezca.
+	flag.StringVar(&videoCodec, "videoCodec", "",
+		"video codec for the main stream: \"h265\" is smaller than h264 at equal quality "+
+			"(measured 16.7 vs 42.9 KB/s at 12 fps); empty leaves it as is")
 	flag.IntVar(&videoFrameRate, "videoFrameRate", 0,
 		"frames per second for the main stream; 0 leaves it as is (ISAPI stores centi-fps)")
 	flag.IntVar(&videoGop, "videoGop", 0,
 		"GOP length in frames; 0 leaves it as is. A shorter GOP means finer seeking")
+	// fixedQuality es la palanca que de verdad manda el tamaño en la cámara verificada. El
+	// modelo admite 1, 20, 40, 60, 80 y 100, y viene en 40; un valor fuera de esa lista se
+	// guarda recortado respondiendo OK, así que el actor relee después de escribir.
+	flag.IntVar(&videoQuality, "videoQuality", 0,
+		"VBR quality of the main stream, 1..100 (the verified model accepts 1,20,40,60,80,100); "+
+			"lower means smaller files; 0 leaves it as is")
+	// El techo de bitrate no baja el tamaño típico: acota el peor caso. En la cámara
+	// verificada viene en 8192 kbps mientras graba a ~200, así que no ata nada.
+	flag.IntVar(&videoBitrateMax, "videoBitrateMax", 0,
+		"VBR bitrate ceiling in kbps, 32..16384; bounds the worst case, does not lower the "+
+			"typical size; 0 leaves it as is")
 }
 
 func main() {
@@ -137,6 +163,23 @@ func main() {
 	camerasByDoor, err := resolveCameras(cameras)
 	if err != nil {
 		log.Fatalln(err)
+	}
+
+	// El perfil de codificación se valida acá y no en el actor: un valor mal escrito que
+	// se ignore en silencio deja la cámara con el ajuste viejo mientras la configuración
+	// dice otra cosa, y eso se descubre recién al ver un clip congelado.
+	videoCodec, err = client.NormalizeVideoCodec(videoCodec)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	if _, err := client.NormalizeSmartCodec(smartCodec); err != nil {
+		log.Fatalln(err)
+	}
+	if videoQuality < 0 || videoQuality > 100 {
+		log.Fatalf("-videoQuality %d está fuera de 1..100", videoQuality)
+	}
+	if videoBitrateMax != 0 && (videoBitrateMax < 32 || videoBitrateMax > 16384) {
+		log.Fatalf("-videoBitrateMax %d está fuera de 32..16384 kbps", videoBitrateMax)
 	}
 
 	// Credentials are only needed to talk to the camera, so a missing or unreadable
@@ -207,16 +250,24 @@ func main() {
 			videoDir, videoPreRoll, videoDuration, videoQueue)
 	}
 
-	// El mantenimiento de hora y NTP exige las mismas tres cosas que el video: a qué
-	// cámara preguntarle, con qué credenciales, y acá además el servidor deseado.
+	// El actor de cámara se crea si se pide CUALQUIERA de sus trabajos: el mantenimiento de
+	// hora (-ntpServer) o el perfil de codificación. Antes solo lo creaba -ntpServer, así que
+	// un -videoCodec o un -smartCodec sin él quedaban ignorados en silencio, con la única
+	// pista de un "camera time maintenance disabled" que hablaba de otra cosa.
+	//
+	// Adentro cada bloque se autolimita: sin -ntpServer no se toca el reloj ni los servidores
+	// NTP, aunque la deriva se sigue midiendo para el reporte. El horario de grabación sí se
+	// alinea en los dos casos, porque sin grabación no hay video que extraer y quien configura
+	// el codec está justamente haciendo video.
+	pideEncoder := len(smartCodec) > 0 || len(videoCodec) > 0 ||
+		videoFrameRate > 0 || videoGop > 0 || videoQuality > 0 || videoBitrateMax > 0
 	switch {
-	case len(ntpServer) == 0:
-		infolog.Println("camera time maintenance disabled (-ntpServer not set)")
+	case len(ntpServer) == 0 && !pideEncoder:
+		infolog.Println("camera maintenance disabled (neither -ntpServer nor an encoder flag set)")
 	case len(camerasByDoor) == 0:
-		warnlog.Println("camera time maintenance disabled: -ntpServer is set but there is no -camera")
+		warnlog.Println("camera maintenance disabled: there is no -camera")
 	case len(camUser) == 0:
-		warnlog.Printf("camera time maintenance disabled: -ntpServer is set but %s is not usable",
-			envCredentials)
+		warnlog.Printf("camera maintenance disabled: %s is not usable", envCredentials)
 	default:
 		cam := client.NewCameraActor(camerasByDoor, camUser, camPass, client.CameraConfig{
 			Server:      ntpServer,
@@ -229,21 +280,30 @@ func main() {
 			SmartCodec:  smartCodec,
 			FrameRate:   videoFrameRate,
 			GopFrames:   videoGop,
+			VideoCodec:  videoCodec,
+			Quality:     videoQuality,
+			BitrateMax:  videoBitrateMax,
 		}, cameraCheckInterval)
 		cam.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 		if debug {
 			cam.WithDebug()
 		}
 		counting.SetCameraProps(actor.PropsFromProducer(func() actor.Actor { return cam }))
-		infolog.Printf("camera time maintenance enabled: ntp=%s:%d every %v, zone=%q, driftMax=%v, check=%v, recording %s-%s",
-			ntpServer, ntpPort, ntpInterval, ntpTimeZone, ntpDriftMax, cameraCheckInterval,
-			recordStart, recordEnd)
+		if len(ntpServer) > 0 {
+			infolog.Printf("camera time maintenance enabled: ntp=%s:%d every %v, zone=%q, driftMax=%v, check=%v, recording %s-%s",
+				ntpServer, ntpPort, ntpInterval, ntpTimeZone, ntpDriftMax, cameraCheckInterval,
+				recordStart, recordEnd)
+		} else {
+			infolog.Printf("camera maintenance enabled without NTP: no se toca el reloj; "+
+				"check=%v, recording %s-%s", cameraCheckInterval, recordStart, recordEnd)
+		}
 		// El perfil del encoder se anuncia aparte porque es el único que puede terminar en
 		// un reinicio de la cámara, y conviene verlo en el log de arranque.
-		if len(smartCodec) > 0 || videoFrameRate > 0 || videoGop > 0 {
-			infolog.Printf("encoder profile: smartCodec=%q fps=%d gop=%d; se aplica cuando el "+
-				"binario lleve un rato encendido, y reinicia la cámara si el cambio lo exige",
-				smartCodec, videoFrameRate, videoGop)
+		if pideEncoder {
+			infolog.Printf("encoder profile: codec=%q smartCodec=%q fps=%d gop=%d quality=%d "+
+				"bitrateMax=%d; se aplica cuando el binario lleve un rato encendido, y "+
+				"reinicia la cámara si el cambio lo exige",
+				videoCodec, smartCodec, videoFrameRate, videoGop, videoQuality, videoBitrateMax)
 		}
 	}
 

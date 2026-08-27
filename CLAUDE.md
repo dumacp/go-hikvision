@@ -380,7 +380,33 @@ extractor. Va al evento `CAMERATIME` como `storage` y `storage_free_mb`.
 ### Perfil de codificación y reinicio (`-smartCodec`)
 
 Flags, todos vacíos o en cero por defecto = **dejar la cámara como esté**: `-smartCodec`
-(`off`/`on`), `-videoFrameRate` (fps), `-videoGop` (cuadros).
+(`off`/`on`), `-videoCodec` (`h264`/`h265`), `-videoFrameRate` (fps), `-videoGop` (cuadros),
+`-videoQuality` (1..100) y `-videoBitrateMax` (kbps).
+
+**Cualquiera de estos flags crea el `CameraActor` por sí solo**, sin necesidad de `-ntpServer`.
+Antes solo lo creaba `-ntpServer`, así que un `-smartCodec off` sin él quedaba ignorado en
+silencio. Sin `-ntpServer` no se toca el reloj ni los servidores NTP —la deriva se mide igual,
+para el reporte— pero el horario de grabación **sí** se alinea, porque sin grabación no hay video
+que extraer.
+
+De las dos palancas de tamaño, la que manda es `-videoQuality` (el `fixedQuality` de ISAPI, que
+viene en 40 y el modelo verificado admite 1, 20, 40, 60, 80 y 100). `-videoBitrateMax` es el
+`vbrUpperCap`: acota el peor caso, no baja el tamaño típico — en la cámara verificada viene en
+8192 kbps mientras graba a ~200, así que no ata nada.
+
+Medido en la misma cámara, misma escena, `fixedQuality 40`, ventana de 12 s:
+
+| codec | H.264+ | fps | hueco máx | **KB/s** | ¿se ve el cruce? |
+|---|---|---|---|---|---|
+| H.264 | on | 20 | 0.08 s | 25.9 | **a veces** — 18 de 23 clips congelados con tráfico real |
+| H.265 | on | 20 | **10.2 s** | 2.9 | no |
+| H.265 | off | 20 | 0.18 s | 28.2 | sí |
+| H.264 | off | 20 | 0.08 s | 42.9 | sí |
+| **H.265** | **off** | **12** | 0.18 s | **16.7** | **sí** |
+
+**La combinación recomendada es la última**: `-videoCodec h265 -smartCodec off -videoFrameRate 12`.
+Sale **35% más chica que H.264+** y **61% más chica que H.264 sin el `+`**, con el cruce siempre
+visible. El `+` compraba tamaño a costa de no grabar; H.265 lo compra comprimiendo.
 
 **`-smartCodec off` es el que importa.** H.264+ con escena quieta graba un keyframe cada
 varios segundos y el clip parece congelado: medido, **49 frames con un hueco de 5.7 s** contra
@@ -425,10 +451,14 @@ habilitarlo: si pediste `-smartCodec off`, se aplica. Cinco cosas que explican e
   así atrapa cualquier recorte silencioso, de este modelo o de otro. Y cuando no queda, **no se
   declara `fixed`**: decirle a la plataforma que se corrigió algo que la cámara no aplicó es
   peor que no decir nada.
-- **`videoCodecType` se reporta pero NUNCA se escribe.** `video/extract.go` solo maneja H.264;
-  poner H.265 desde acá rompería la extracción en silencio. El actor deja WARN y el codec
-  observado viaja en el evento (`video_codec`, `video_fps`, `smart_codec`) para que la
-  plataforma detecte de lejos una cámara mal configurada.
+- **`videoCodecType` se escribe en caliente**, `statusCode 1`, sin reiniciar. El extractor
+  maneja H.264 **y** H.265, y elige según lo que la cámara ofrezca para cada tramo: la SD
+  conserva grabaciones de antes del cambio, y cada clip queda con su codec anotado en el
+  sidecar (`codec`) y en el log. El codec observado sigue viajando en el evento
+  (`video_codec`, `video_fps`, `smart_codec`).
+- **Un valor mal escrito en `-videoCodec` o `-smartCodec` detiene el arranque.** Ignorarlo en
+  silencio dejaría la cámara con el ajuste viejo mientras la configuración dice otra cosa, y
+  eso se descubre recién al ver un clip congelado.
 
 El reinicio **se decide en el hilo del actor y se ejecuta en goroutine**: `considerReboot` marca
 `rebooted` antes de lanzar el PUT, así el candado se cierra sin carrera, y `msgRebootDone` trae

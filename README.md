@@ -169,8 +169,40 @@ Todos vacíos o en cero dejan la cámara como esté.
 | Flag | Default | |
 |---|---|---|
 | `-smartCodec` | vacío | `off` desactiva H.264+, `on` lo activa |
+| `-videoCodec` | vacío | `h264` o `h265` |
 | `-videoFrameRate` | `0` | cuadros por segundo del stream principal |
 | `-videoGop` | `0` | largo del GOP en cuadros |
+| `-videoQuality` | `0` | calidad VBR, 1..100 (el modelo verificado admite 1,20,40,60,80,100) |
+| `-videoBitrateMax` | `0` | techo de bitrate en kbps, 32..16384 |
+
+Cualquiera de estos flags habilita el bloque de mantenimiento por sí solo: **no hace falta
+`-ntpServer`**. Sin él no se toca el reloj de la cámara, pero el horario de grabación sí se alinea.
+
+`-videoQuality` es la palanca que baja el tamaño. `-videoBitrateMax` solo acota el peor caso: en
+la cámara verificada viene en 8192 kbps mientras graba a ~200, así que no ata nada.
+
+Un valor mal escrito en `-smartCodec` o `-videoCodec` **detiene el arranque**, en vez de quedar
+ignorado y dejar la cámara con el ajuste viejo.
+
+### La combinación recomendada
+
+```
+-videoCodec h265 -smartCodec off -videoFrameRate 12
+```
+
+Medido en la misma cámara, misma escena, ventana de 12 s:
+
+| codec | H.264+ | fps | hueco máx | **KB/s** | ¿se ve el cruce? |
+|---|---|---|---|---|---|
+| H.264 | on | 20 | 0.08 s | 25.9 | **a veces** |
+| H.265 | on | 20 | **10.2 s** | 2.9 | no |
+| H.265 | off | 20 | 0.18 s | 28.2 | sí |
+| H.264 | off | 20 | 0.08 s | 42.9 | sí |
+| **H.265** | **off** | **12** | 0.18 s | **16.7** | **sí** |
+
+El extractor maneja los dos codecs y elige según lo que la cámara ofrezca para cada tramo, así
+que las grabaciones anteriores a un cambio de codec siguen siendo extraíbles. Cada clip anota el
+suyo en el sidecar (`codec`).
 
 **`-smartCodec off` es obligatorio si se quiere video útil.** Con H.264+ activo la cámara deja de
 emitir cuadros cuando el cambio en la escena le parece pequeño, y una persona atravesando una
