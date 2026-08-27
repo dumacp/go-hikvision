@@ -25,20 +25,24 @@ const (
 	// alarmar. Con uno solo, un pico de latencia o una corrección en curso generaría
 	// falsas alarmas.
 	cameraDriftCycles = 3
-	// encoderMinUptime es lo que el binario tiene que llevar encendido antes de tocar el
-	// perfil de codificación.
-	//
-	// Es el único freno que tiene el reinicio de cámara, y reemplaza a la ventana horaria
-	// que había antes. La ventana no servía: el gateway se alimenta del vehículo y de noche
-	// queda apagado, así que una franja de madrugada nunca la alcanzaba ningún ciclo y el
-	// ajuste quedaba sin aplicar para siempre.
-	//
-	// Lo que sí hay que acotar es el bucle: el tope de "un reinicio por cámara" vive en
-	// memoria y se pierde al reiniciar el binario, y este repo tiene historia de bucles de
-	// supervisión (el bug de ctx.Parent() nulo produjo 7 arranques seguidos). Un binario que
-	// se reinicia en bucle nunca llega a este mínimo, así que nunca reinicia una cámara.
-	encoderMinUptime = 30 * time.Minute
 )
+
+// EncoderMinUptimeDefault es el default de CameraConfig.EncoderMinUptime: lo que el binario
+// tiene que llevar encendido antes de tocar el perfil de codificación.
+//
+// Es el único freno que tiene el reinicio de cámara, y reemplaza a la ventana horaria que
+// había antes. La ventana no servía: el gateway se alimenta del vehículo y de noche queda
+// apagado, así que una franja de madrugada nunca la alcanzaba ningún ciclo y el ajuste
+// quedaba sin aplicar para siempre.
+//
+// Lo que sí hay que acotar es el bucle: el tope de "un reinicio por cámara" vive en memoria
+// y se pierde al reiniciar el binario, y este repo tiene historia de bucles de supervisión
+// (el bug de ctx.Parent() nulo produjo 7 arranques seguidos). Un binario que se reinicia en
+// bucle nunca llega a este mínimo, así que nunca reinicia una cámara.
+//
+// Bajarlo sirve para probar; en cero el perfil se aplica en el primer ciclo. En producción
+// hay que entender qué se está resignando.
+const EncoderMinUptimeDefault = 30 * time.Minute
 
 // CameraConfig es la configuración que se quiere en toda la flota de cámaras.
 type CameraConfig struct {
@@ -93,6 +97,12 @@ type CameraConfig struct {
 	// valor como esté. Sirve para acotar el peor caso de una escena con mucho movimiento,
 	// no para bajar el tamaño típico.
 	BitrateMax int
+	// EncoderMinUptime es lo que el binario tiene que llevar encendido antes de tocar el
+	// perfil de codificación. Cero lo aplica en el primer ciclo.
+	//
+	// Es el ÚNICO freno contra un bucle de reinicios de cámara, así que bajarlo tiene una
+	// consecuencia concreta: ver encoderMinUptime para el detalle.
+	EncoderMinUptime time.Duration
 }
 
 // wantsEncoder indica si hay algo que alinear en el perfil de codificación.
@@ -288,7 +298,8 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 	// guardado, no el efectivo**: si se escribiera ahora y el reinicio quedara para después,
 	// un arranque del binario en el medio haría que el ciclo siguiente no viera diferencia y
 	// nadie reiniciara nunca.
-	encoderListo := a.want.wantsEncoder() && time.Since(a.startedAt) >= encoderMinUptime
+	encoderListo := a.want.wantsEncoder() &&
+		time.Since(a.startedAt) >= a.want.EncoderMinUptime
 
 	trabajos := make([]struct {
 		door    int32
@@ -833,7 +844,7 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 		st.rebootWarned = true
 		a.infoLog.Printf("cámara de la puerta %d (%s): %s pendiente(s), se aplican cuando el "+
 			"binario lleve %v encendido", res.door, res.host,
-			strings.Join(res.encoderPending, ", "), encoderMinUptime)
+			strings.Join(res.encoderPending, ", "), a.want.EncoderMinUptime)
 	}
 	if len(res.encoderPending) == 0 {
 		st.rebootWarned = false

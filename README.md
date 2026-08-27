@@ -174,6 +174,12 @@ Todos vacíos o en cero dejan la cámara como esté.
 | `-videoGop` | `0` | largo del GOP en cuadros |
 | `-videoQuality` | `0` | calidad VBR, 1..100 (el modelo verificado admite 1,20,40,60,80,100) |
 | `-videoBitrateMax` | `0` | techo de bitrate en kbps, 32..16384 |
+| `-encoderMinUptime` | `30m` | cuánto debe llevar encendido el binario antes de tocar el perfil |
+
+**`-encoderMinUptime` es el único freno contra un bucle de reinicios de cámara.** El tope de "un
+reinicio por cámara" vive en memoria y se pierde al arrancar de nuevo, así que un binario que
+reinicia en bucle solo se detiene si nunca alcanza este umbral. En `0` el perfil se aplica en el
+primer ciclo, que sirve para probar; por debajo de 5 minutos el binario deja un WARN al arrancar.
 
 Cualquiera de estos flags habilita el bloque de mantenimiento por sí solo: **no hace falta
 `-ntpServer`**. Sin él no se toca el reloj de la cámara, pero el horario de grabación sí se alinea.

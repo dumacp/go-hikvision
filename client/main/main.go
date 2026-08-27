@@ -47,6 +47,7 @@ var videoFrameRate int
 var videoGop int
 var videoQuality int
 var videoBitrateMax int
+var encoderMinUptime time.Duration
 
 var isZeroOpenState zeroFlags
 var enableCountWithCloseDoor closeFlags
@@ -140,6 +141,12 @@ func init() {
 	flag.IntVar(&videoBitrateMax, "videoBitrateMax", 0,
 		"VBR bitrate ceiling in kbps, 32..16384; bounds the worst case, does not lower the "+
 			"typical size; 0 leaves it as is")
+	// Este mínimo es el ÚNICO freno contra un bucle de reinicios de cámara: el tope de "un
+	// reinicio por cámara" vive en memoria y se pierde al arrancar de nuevo, así que un
+	// binario que reinicia en bucle solo se detiene si nunca alcanza este umbral.
+	flag.DurationVar(&encoderMinUptime, "encoderMinUptime", client.EncoderMinUptimeDefault,
+		"how long the binary must be up before touching the encoder profile; 0 applies it on "+
+			"the first cycle. It is the only brake against a camera reboot loop")
 }
 
 func main() {
@@ -180,6 +187,9 @@ func main() {
 	}
 	if videoBitrateMax != 0 && (videoBitrateMax < 32 || videoBitrateMax > 16384) {
 		log.Fatalf("-videoBitrateMax %d está fuera de 32..16384 kbps", videoBitrateMax)
+	}
+	if encoderMinUptime < 0 {
+		log.Fatalf("-encoderMinUptime %v no puede ser negativo", encoderMinUptime)
 	}
 
 	// Credentials are only needed to talk to the camera, so a missing or unreadable
@@ -270,19 +280,20 @@ func main() {
 		warnlog.Printf("camera maintenance disabled: %s is not usable", envCredentials)
 	default:
 		cam := client.NewCameraActor(camerasByDoor, camUser, camPass, client.CameraConfig{
-			Server:      ntpServer,
-			Port:        ntpPort,
-			Interval:    ntpInterval,
-			TimeZone:    ntpTimeZone,
-			DriftMax:    ntpDriftMax,
-			RecordStart: recordStart,
-			RecordEnd:   recordEnd,
-			SmartCodec:  smartCodec,
-			FrameRate:   videoFrameRate,
-			GopFrames:   videoGop,
-			VideoCodec:  videoCodec,
-			Quality:     videoQuality,
-			BitrateMax:  videoBitrateMax,
+			Server:           ntpServer,
+			Port:             ntpPort,
+			Interval:         ntpInterval,
+			TimeZone:         ntpTimeZone,
+			DriftMax:         ntpDriftMax,
+			RecordStart:      recordStart,
+			RecordEnd:        recordEnd,
+			SmartCodec:       smartCodec,
+			FrameRate:        videoFrameRate,
+			GopFrames:        videoGop,
+			VideoCodec:       videoCodec,
+			Quality:          videoQuality,
+			BitrateMax:       videoBitrateMax,
+			EncoderMinUptime: encoderMinUptime,
 		}, cameraCheckInterval)
 		cam.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 		if debug {
@@ -301,9 +312,18 @@ func main() {
 		// un reinicio de la cámara, y conviene verlo en el log de arranque.
 		if pideEncoder {
 			infolog.Printf("encoder profile: codec=%q smartCodec=%q fps=%d gop=%d quality=%d "+
-				"bitrateMax=%d; se aplica cuando el binario lleve un rato encendido, y "+
-				"reinicia la cámara si el cambio lo exige",
-				videoCodec, smartCodec, videoFrameRate, videoGop, videoQuality, videoBitrateMax)
+				"bitrateMax=%d; se aplica a los %v de encendido, y reinicia la cámara si el "+
+				"cambio lo exige",
+				videoCodec, smartCodec, videoFrameRate, videoGop, videoQuality, videoBitrateMax,
+				encoderMinUptime)
+			// El aviso no es formal: bajar este mínimo es exactamente lo que permite que un
+			// binario en bucle de supervisión reinicie cámaras una y otra vez.
+			if encoderMinUptime < 5*time.Minute {
+				warnlog.Printf("-encoderMinUptime en %v: si el binario entra en bucle de "+
+					"reinicios va a alcanzar ese umbral en cada vuelta y puede reiniciar la "+
+					"cámara repetidas veces. El default de %v existe para evitarlo",
+					encoderMinUptime, client.EncoderMinUptimeDefault)
+			}
 		}
 	}
 

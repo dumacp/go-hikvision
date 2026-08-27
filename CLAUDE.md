@@ -431,7 +431,7 @@ habilitarlo: si pediste `-smartCodec off`, se aplica. Cinco cosas que explican e
   y la lectura del API coinciden en decir lo contrario.
 - **`considerReboot` no vuelve a comprobar ninguna precondición**, por lo mismo: hacerlo podría
   dejar el cambio ya escrito pero sin reiniciar.
-- **El único freno es `encoderMinUptime` (30 min).** El tope de "un reinicio por cámara"
+- **El único freno es `-encoderMinUptime` (30 min por defecto, configurable).** El tope de "un reinicio por cámara"
   (`camTimeState.rebooted`) vive en memoria y se pierde al arrancar de nuevo, y este repo tiene
   historia de bucles de supervisión —el bug de `ctx.Parent()` nulo produjo 7 arranques
   seguidos—. Un binario en bucle nunca llega a los 30 minutos, así que nunca reinicia una
