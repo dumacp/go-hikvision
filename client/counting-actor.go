@@ -335,8 +335,17 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 					a.inputsmap[id] += msg.GetValue()
 					a.allInputsmap[id] += msg.GetValue()
 				}
+			} else if diff == 0 {
+				// Sin cambio, y es el caso NORMAL: la cámara reporta enter y exit en cada
+				// evento, así que cuando cruza alguien en un sentido el otro contador
+				// queda igual. Iba al WARN de "> 10" y llenaba el log de descartes que no
+				// existían.
+				a.buildLog.Printf("counting (id: %d) sin entradas nuevas, acumulado %d",
+					id, msg.GetValue())
 			} else {
-				a.warnLog.Printf("counting (id: %d) diff inputs > 10, diff count: %v", id, diff)
+				a.warnLog.Printf("counting (id: %d) DESCARTA %d entradas: el salto es de 10 "+
+					"o más, acumulado de la cámara %d contra %d guardado",
+					id, diff, msg.GetValue(), a.rawInputsmap[id])
 			}
 			a.rawInputsmap[id] = msg.GetValue()
 		case messages.Event_OUTPUT:
@@ -372,8 +381,14 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 					a.outputsmap[id] += msg.GetValue()
 					a.allOutputsmap[id] += msg.GetValue()
 				}
+			} else if diff == 0 {
+				// Igual que en las entradas: sin cambio es lo normal, no un descarte.
+				a.buildLog.Printf("counting (id: %d) sin salidas nuevas, acumulado %d",
+					id, msg.GetValue())
 			} else {
-				a.warnLog.Printf("counting (id: %d) diff outputs > 10, diff count: %v", id, diff)
+				a.warnLog.Printf("counting (id: %d) DESCARTA %d salidas: el salto es de 10 "+
+					"o más, acumulado de la cámara %d contra %d guardado",
+					id, diff, msg.GetValue(), a.rawOutputsmap[id])
 			}
 			a.rawOutputsmap[id] = msg.GetValue()
 		case messages.Event_TAMPERING:
