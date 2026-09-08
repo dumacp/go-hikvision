@@ -107,16 +107,17 @@ El índice completo de endpoints con método y mensaje está en
 En orden, del lado nuestro hacia la cámara:
 
 1. ¿El proceso escucha? `ss -lntp | grep 8088`
-2. ¿`Content-Type` aceptado? El handler exige que contenga **`application/xml`**
-   ([listenner.go:42](../../../peoplecounting/listenner.go#L42)); si no, **descarta el cuerpo en
-   silencio y responde 200 igual**. La spec (§6.2) documenta que en listening mode el
-   `Content-Type` puede ser **`text/xml`** o `multipart/form-data` (cuando la cámara adjunta
-   imagen). Ver "Discrepancias" abajo.
+2. ¿`Content-Type` aceptado? Desde **1.0.30** el handler acepta cualquier media type que contenga
+   `xml` y **deja WARN al descartar**, así que un `multipart/form-data` —que la spec §6.2 permite
+   cuando la cámara adjunta imagen— ya no desaparece sin rastro. Sigue sin parsearse; ver
+   "Discrepancias".
 3. ¿Llega el POST? Corre con `-logStd -debug -logxml` y revisa `cameralog`: registra el cuerpo
    crudo antes de parsear ([listenner.go:56](../../../peoplecounting/listenner.go#L56)).
-4. ¿El httpHost está bien y alcanzable? `POST .../httpHosts/<ID>/test`. Si da
-   `connect server fail`, el problema es de red o **no hay nada escuchando** en ese puerto — el
-   rechazo de TCP se ve idéntico a un bloqueo de firewall.
+4. ¿El httpHost está bien y alcanzable? `POST .../httpHosts/<ID>/test` → `errorCode 0` / `ok` si
+   la cámara alcanza al gateway, `errorCode 151` / `connect server fail` si no. **Es la prueba que
+   distingue "la cámara no manda" de "manda y no llega".** Ojo: el rechazo de TCP se ve idéntico a
+   un bloqueo de firewall. Y la cámara admite varios destinos (`/1`, `/2`, `/3`), así que agregá
+   el gateway en un slot libre en vez de sobrescribir el que ya está.
 5. ¿Hay ruta de vuelta? La cámara puede ser alcanzable **desde** el gateway y no poder alcanzarlo
    ella. Para aislarlo, apuntá el httpHost a un tercero vivo en la red destino: si también falla,
    es ruteo; si solo falla el listener, es el firewall o el proceso.
@@ -231,8 +232,16 @@ reglas de abajo.
 - **Escribí solo lo que difiere.** `CameraActor` compara antes de hacer PUT: sin eso serían
   escrituras periódicas a toda la flota para dejar todo igual.
 - **`statusCode 7` es "aplicado, falta reiniciar", no un fallo.** El cliente lo devuelve como
-  error porque `ResponseStatus.OK()` solo acepta 0 y 1; interpretalo y avisá, pero **no reinicies
-  la cámara sola**.
+  error porque `ResponseStatus.OK()` solo acepta 0 y 1. `CameraActor` lo interpreta y **sí reinicia
+  la cámara**, en el mismo ciclo que escribió: un cambio que responde 7 queda guardado pero inerte
+  y la cámara reporta el valor guardado, así que separar el PUT del reinicio deja un estado donde
+  la configuración y la lectura del API coinciden en decir algo que la cámara no está haciendo.
+  El único freno es `-encoderMinUptime` (30 min), que impide que un binario en bucle de
+  supervisión reinicie cámaras.
+- **Un `statusCode 1 OK` NO garantiza que el valor quedó.** Medido: pedirle 30 fps, que no está
+  entre los admitidos, responde OK y guarda 24 **en silencio**. Sin releer, el ciclo siguiente
+  vuelve a ver la diferencia y escribe otra vez, para siempre. Releé después de escribir y volvé a
+  medir; si no quedó, ERROR y dejá de intentar en esa cámara.
 - **Un 401 tiene que apagar esa cámara hasta el próximo arranque**, no reintentarse cada ciclo:
   el firmware verificado no informa los intentos restantes y bloquea el usuario.
 - Timeout explícito en el `http.Client`. El `http.Get` del ping actual no tiene ninguno.

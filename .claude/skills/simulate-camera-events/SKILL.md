@@ -52,6 +52,44 @@ El script pone `dateTime` en la hora actual (obligatorio: los eventos con fecha 
 último visto se descartan) y el `Content-Type: application/xml` (sin él el handler **ignora el
 cuerpo y responde 200 igual**, el fallo más engañoso de todos).
 
+## Inyectar en el gateway ARM: `wget` de BusyBox no hace POST
+
+En el equipo (`BusyBox v1.23.2`) **no hay `curl`, no hay `timeout`, y el `wget` solo hace GET** —
+no tiene `--post-data` ni `--post-file`. Hay `nc`, así que el request se arma a mano:
+
+```sh
+cat > /tmp/post.sh <<'EOF'
+#!/bin/sh
+# post.sh <archivo-xml> [host puerto]
+f="$1"; t="${2:-127.0.0.1 8088}"
+len=$(wc -c < "$f")
+{
+printf "POST / HTTP/1.1\r\n"
+printf "Host: 127.0.0.1\r\n"
+printf "Content-Type: application/xml\r\n"
+printf "Content-Length: %s\r\n" "$len"
+printf "Connection: close\r\n\r\n"
+cat "$f"
+} | nc $t
+EOF
+chmod +x /tmp/post.sh
+```
+
+Tres cosas que hacen falta para que el evento no se descarte:
+
+- **el `dateTime` tiene que venir del reloj correcto.** Si el reloj del gateway está corrido, generá
+  la marca en la máquina de desarrollo y copiá el XML — el evento se compara contra el `timeBefore`
+  de esa puerta y contra las grabaciones de la cámara, que usan el reloj de la cámara;
+- **el `Content-Type` es obligatorio**: sin `xml` en él el handler descarta el cuerpo y responde 200
+  igual (deja WARN desde 1.0.30);
+- **para acotar la corrida no uses `timeout`**, que no existe: lanzá en segundo plano y matá por PID
+  (`cmd & BGPID=$!; sleep 25; kill $BGPID`).
+
+Y para que la extracción de video se ejercite, el evento desde `127.0.0.1` cae en la **puerta 0**,
+así que la cámara tiene que estar en ese índice: `-camera <ip>:0`. Con `-camera <ip>:1` el evento va
+a la puerta 0, que queda vacía, y el log dice `sin -camera para la puerta 0, no se puede extraer
+video`.
+
 ## Qué esperar
 
 | Envío | Resultado correcto |

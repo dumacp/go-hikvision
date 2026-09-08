@@ -337,6 +337,81 @@ El precio es **x2.6 en bitrate**: 228 MB/hora, y la retención de una SD de 7695
 a **4.2 días** con un horario de 8 h diarias (1.4 días si fuera 24/7). Sigue siendo cómodo para
 extraer poco después del evento, pero hay que tenerlo en cuenta al dimensionar la tarjeta.
 
+### Palancas del encoder y sus valores admitidos
+
+`GET /ISAPI/Streaming/channels/101/capabilities` en el DS-2XM6825G0 (V5.5.850):
+
+```
+videoCodecType          opt="H.264,H.265"                    actual H.264
+videoResolutionWidth    opt="1440,1920"                      actual 1440
+videoResolutionHeight   opt="900,1200"                       actual 900
+videoQualityControlType opt="CBR,VBR"                        actual VBR
+fixedQuality            opt="1,20,40,60,80,100"              actual 40
+vbrUpperCap             min="32" max="16384"                 actual 8192
+maxFrameRate            opt="2400,2200,2000,1800,1600,1500,1200,1000,800,600,400,200,100,50,25,12,6"
+GovLength               min="1" max="400"                    actual 50
+H264Profile             opt="Baseline,Main,High"             actual Main
+H265Profile             opt="Main"
+```
+
+Tres cosas que importan al elegir:
+
+- **`vbrUpperCap` no ata nada por defecto**: viene en 8192 kbps mientras la cámara graba a ~200.
+  Lo que manda el tamaño es `fixedQuality`.
+- **`maxFrameRate` va en centi-fps** y el máximo es 2400, o sea **24 fps**. No hay 30.
+- **Un valor fuera de la lista se guarda recortado respondiendo `statusCode 1 OK`.** Medido:
+  pedir 3000 (30 fps) guarda 2400 y responde OK. Hay que releer para saber si quedó.
+
+### El codec y el `+` son interruptores distintos
+
+`SmartCodec` es el `+`, no el codec. Las cuatro combinaciones, medidas en la misma cámara, misma
+escena, `fixedQuality 40`, ventana de 12 s:
+
+| `videoCodecType` | `SmartCodec` | fps | fotos | hueco máx | KB/s | ¿se ve el cruce? |
+|---|---|---|---|---|---|---|
+| H.264 | on | 20 | 241 | 0.08 s | 25.9 | **a veces** — 18 de 23 clips congelados con tráfico real |
+| H.265 | on | 20 | 39 | **10.2 s** | 2.9 | no |
+| H.265 | off | 20 | 239 | 0.18 s | 28.2 | sí |
+| H.264 | off | 20 | 241 | 0.08 s | 42.9 | sí |
+| **H.265** | **off** | **12** | 144 | 0.18 s | **16.7** | **sí** |
+
+**El `+` compra tamaño no grabando; H.265 lo compra comprimiendo.** Por eso H.265**+** es el peor
+de los cuatro y la combinación recomendada es la última. El extractor maneja los dos codecs, así
+que el cambio es seguro y las grabaciones viejas siguen siendo extraíbles.
+
+### Probar si la cámara alcanza al gateway
+
+`POST /ISAPI/Event/notification/httpHosts/<ID>/test` con el `XML_HttpHostNotification` del destino.
+Es la única forma de distinguir "la cámara no manda eventos" de "los manda y no llegan":
+
+```
+<errorCode>0</errorCode>   <errorDescription>ok</errorDescription>                 alcanza
+<errorCode>151</errorCode> <errorDescription>connect server fail</errorDescription> no alcanza
+```
+
+La cámara admite varios destinos (`/1`, `/2`, `/3`), así que se puede agregar el gateway sin borrar
+una configuración existente. Los slots libres vienen en `0.0.0.0`.
+
+### Conteo: `detectionMode` NO significa "contar doble"
+
+`detectionMode opt="single,double,double_single,single_double" def="double_single"` se refiere a
+**qué sensor usa**, no a cuántas veces cuenta (§9.4 del PDF de conteo):
+
+```
+single         detección por algoritmo de seguimiento
+double         detección por mapa de profundidad
+double_single  profundidad principalmente, seguimiento secundario   ← default
+single_double  seguimiento principalmente, profundidad secundaria
+```
+
+Si se sospecha doble conteo, la palanca es `TrajectoryCountFilter` (`movementDisplacement`, rango
+0-200 cm, default 40; `residenceTime`, 0-10 s, default 0.1), no `detectionMode`.
+
+**Y antes de sospechar, contá los eventos.** La cámara manda **acumulados**, así que un evento con
+incremento 2 puede ser doble conteo o dos personas juntas. Verificado con dos rondas controladas de
+2 entradas y 2 salidas: la cámara reportó +2 y +2 en un evento por movimiento — correcto. El
+número de eventos coincidiendo con el número de movimientos es lo que descarta el doble conteo.
+
 ### Qué escritura exige reiniciar y qué no
 
 Medido en el DS-2XM6825G0 (V5.5.850). Importa porque decide si un cambio se puede aplicar en
@@ -363,8 +438,14 @@ así que una franja de madrugada nunca se alcanzaba.
 Dos trampas del `<Video>` de este endpoint:
 
 - **`maxFrameRate` va en centi-fps**: `2000` son 20 fps. Escribir `20` deja la cámara a 0.2 fps.
-- **`videoCodecType` no se toca desde el binario.** `video/extract.go` solo maneja H.264; poner
-  H.265 rompe la extracción en silencio. Se reporta en el evento `CAMERATIME` y se deja WARN.
+- **`videoCodecType` se escribe en caliente**, `statusCode 1`, sin reiniciar. El extractor maneja
+  H.264 **y** H.265 y elige según lo que la cámara ofrezca para cada tramo, así que las grabaciones
+  anteriores a un cambio de codec siguen siendo extraíbles. Flag `-videoCodec h264|h265`.
+- **Un `statusCode 1 OK` NO garantiza que el valor quedó.** Medido: pedirle 30 fps —que no está
+  entre los que admite— responde **OK y guarda 24 en silencio**. El actor relee después de cada
+  escritura y vuelve a medir la diferencia; si algo no quedó deja ERROR, publica `encoder_rejected`
+  y no reintenta en esa cámara hasta el próximo arranque. La comprobación es genérica y no valida
+  contra la lista de capacidades, así atrapa cualquier recorte silencioso.
 
 ### Eventos individuales: el API no los tiene
 

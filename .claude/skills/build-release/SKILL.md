@@ -14,8 +14,12 @@ go build -o /tmp/hikvision ./client/main
 ```
 
 `go test ./...` **falla hoy** por un caso de prueba incompleto en `peoplecounting`
-(ver deuda conocida en CLAUDE.md). No lo tomes como regresión de tu cambio: compara antes
-y después.
+(ver deuda conocida en CLAUDE.md). No lo tomes como regresión de tu cambio. Los tres paquetes
+con pruebas reales sí pasan, así que corré esos en vez del global:
+
+```bash
+go test ./client/... ./isapi/
+```
 
 ## Dependencias por `replace` — la causa #1 de builds roto
 
@@ -40,15 +44,19 @@ Nada del código usa cgo, así que:
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
-  go build -ldflags="-s -w" -o hikvision-1.0.29-armv7 ./client/main
+  go build -ldflags="-s -w" \
+  -o hikvision-$(grep -oP 'showVersion = "\K[^"]+' client/main/main.go)-g$(git rev-parse --short HEAD)-armv7 \
+  ./client/main
 ```
 
-**Confirma la arquitectura destino con el usuario antes de entregar** — el repo no tiene script
-de build ni CI que la fije, y `arm/GOARM=7` es la suposición razonable para esta familia de
-equipos, no un dato verificado. En el equipo: `uname -m`.
+**`armv7l` está verificado**: el binario corre en un gateway `FLO-W7-0036` con BusyBox 1.23.2,
+`/bin/sh` → bash, y `/SD` en `/dev/mmcblk1p1`. Sale estático y sin sección dinámica, así que no
+depende de la libc del equipo. Pesa ~14 MB.
 
-Nombra el artefacto con la versión: facilita la trazabilidad de qué binario quedó en cada
-vehículo, que es información que hoy no existe en ningún otro lado.
+**Nombra el artefacto con la versión Y el hash del commit.** La versión sola no identifica un
+binario: la constante se sube solo al desplegar, así que varios commits la comparten. En esta
+historia hubo tres binarios distintos reportando `1.0.36`, y eso hace inútil cualquier reporte de
+pruebas que diga "probamos la 1.0.36".
 
 ## Protobuf
 
@@ -67,14 +75,17 @@ Ver `actor-conventions` para los cuatro puntos que hay que tocar al agregar esta
 
 ## Checklist de release
 
-1. `go build ./... && go vet ./...` limpios.
-2. Subir `showVersion` en [client/main/main.go](../../../client/main/main.go#L19).
-   Es la única fuente de versión y lo que se ve en el log de arranque y por MQTT.
+1. `go build ./... && go vet ./...` limpios, y `go test ./client/... ./isapi/`.
+2. **NO subas `showVersion`.** Se sube aparte, cuando hay acuerdo de que lo que está en `master`
+   es lo que se despliega, y el número lo decide quien despliega. Un commit que la sube por cada
+   cambio produce versiones que nunca existieron como binario: en esta historia `1.0.35` es una
+   sintaxis que se revirtió en `1.0.36`.
 3. Probar sin hardware con la skill `simulate-camera-events`.
 4. Si cambió el contrato MQTT o el XML de la cámara, actualizar `mqtt-contract` /
    `hikvision-isapi` en el mismo commit.
-5. Commit con mensaje al estilo del historial (`version 1.0.29`, o descripción del fix).
-6. Cross-compile con la arquitectura confirmada y nombre versionado.
+5. Commit describiendo el cambio y **por qué**, con las mediciones que lo respaldan. El historial
+   de este repo se usa para entender decisiones seis meses después, no solo para saber qué cambió.
+6. Cross-compile con el nombre que lleva versión y hash.
 
 ## Comportamiento en el equipo que conviene conocer
 

@@ -73,8 +73,8 @@ Mantén ese estilo: mensaje centinela → panic en `Receive`.
 
 ## Jerarquía
 
-`counting` es el hub: crea sus hijos (`events`, `doors`, `ping`, `gps`) dentro de su
-`*actor.Started` y **enruta todo**. Los hijos no se conocen entre sí; se hablan por el padre
+`counting` es el hub: crea sus hijos (`events`, `doors`, `ping`, `gps`, y opcionalmente `video`
+y `camera`) dentro de su `*actor.Started` y **enruta todo**. Los hijos no se conocen entre sí; se hablan por el padre
 con `ctx.Send(ctx.Parent(), msg)` o `ctx.RequestFuture(ctx.Parent(), ...)`.
 
 Un actor nuevo que necesite datos de otro hijo:
@@ -85,6 +85,50 @@ Un actor nuevo que necesite datos de otro hijo:
 3. Todo `RequestFuture` lleva timeout corto y camino de degradación. El GPS usa
    `180*time.Millisecond` y sigue con coordenada vacía si expira: **un evento de conteo nunca
    se pierde por falta de GPS**. Respeta esa prioridad.
+
+### Hijos opcionales: `video` y `camera`
+
+Los dos se crean **solo si sus flags están**, y el patrón es el mismo: `main` arma el actor,
+lo envuelve en `actor.PropsFromProducer` y lo pasa por un setter (`SetVideoProps`,
+`SetCameraProps`); `CountingActor` lo spawnea en `Started` únicamente si el props no es nil.
+
+Así el binario corre igual sin ellos: **no hay rama del conteo que dependa de que existan**.
+`sendCounted` manda el evento a `video` solo si el PID está, y el conteo sigue idéntico. Al
+agregar un hijo opcional, mantené esa propiedad.
+
+## Trabajo lento: nunca dentro de `Receive`
+
+`VideoActor` y `CameraActor` hablan HTTP y RTSP con la cámara, que tarda segundos y puede no
+responder. El patrón que usan los dos, y que hay que respetar:
+
+1. **La decisión se toma en el hilo del actor**, donde vive el estado, y ahí se marca el candado.
+2. **El trabajo va en goroutine**, con `context` acotado.
+3. **El resultado vuelve como mensaje** (`msgVideoDone`, `msgCameraResult`, `msgRebootDone`), que
+   se maneja en `Receive` como cualquier otro.
+
+Marcar el candado *antes* de lanzar la goroutine es lo que evita la carrera: `considerReboot` pone
+`st.rebooted = true` y después lanza el PUT, así dos ciclos no pueden reiniciar la misma cámara.
+
+Y un candado que se cierra **no se reabre al fallar**: si el PUT del reinicio falló pero la cámara
+igual se reinició, reintentar la reiniciaría dos veces. Vale lo mismo para `encoderGiveUp` y
+`unauthorized`: son terminales hasta el próximo arranque del binario, a propósito.
+
+## Dos relojes, y no se mezclan
+
+Es el error más caro que tuvo este repo. Hay dos relojes en juego:
+
+- **el de la cámara**, que llega en `messages.Event.Timestamp` y es el que indexa las grabaciones;
+- **el del gateway**, que es lo que devuelve `time.Now()`.
+
+`VideoActor` calculaba cuánto esperar a que la ventana estuviera grabada con
+`time.Until(hasta)`, donde `hasta` venía del evento. En campo el gateway estaba **19 meses
+atrasado**, así que la espera daba 19 meses: programaba la extracción para dentro de año y medio
+y no escribía un solo clip, **sin un error en el log**. El conteo funcionaba y los clips no
+aparecían.
+
+Ahora la espera se acota al máximo físico y, si lo supera, avisa y sigue. La regla general: si
+una cuenta mezcla una marca de tiempo de la cámara con `time.Now()`, **acotá el resultado a lo
+que es físicamente posible** en vez de confiar en que los relojes coinciden.
 
 ## Persistencia (solo `CountingActor`)
 

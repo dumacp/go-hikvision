@@ -128,9 +128,9 @@ cuando detecta que su reloj derivó:
   momento. Dos mensajes para un cambio obligarían al consumidor a deduplicar.
 - **`video_codec`, `video_fps` y `smart_codec` son lo OBSERVADO al revisar, antes de corregir.**
   En el ejemplo `smart_codec: true` con `fixed: [... -> false]` significa "estaba en true, lo
-  dejamos en false"; el valor efectivo es el de `fixed`. Sirven para detectar de lejos una cámara
-  en H.265 —que rompe la extracción, porque `video/extract.go` solo maneja H.264— o con H.264+
-  activo, que deja los clips congelados.
+  dejamos en false"; el valor efectivo es el de `fixed`. Sirven para ver de lejos con qué está
+  grabando cada cámara: el extractor maneja H.264 y H.265, así que ningún codec "rompe" nada, pero
+  `smart_codec: true` sí anticipa clips congelados.
 - `storage` y `storage_free_mb` (en MB) aparecen cuando se pudo consultar el medio. `storage`
   distinto de `ok` es la condición que hace imposible extraer **cualquier** clip.
 - `ntp_reachable` aparece **solo cuando hubo deriva**: el test del servidor se consulta nada más

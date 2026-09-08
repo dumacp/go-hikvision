@@ -44,7 +44,7 @@ root
 │   ├── ping          PingActor      → keep-alive HTTP a la cámara
 │   ├── gps           GPSActor       → última trama $GPRMC
 │   ├── video         VideoActor     → recorta el video de cada paso (solo con -videoDir)
-│   └── camera        CameraActor    → hora, NTP, grabación, SD y codec (solo con -ntpServer)
+│   └── camera        CameraActor    → hora, NTP, grabación, SD y codec (-ntpServer o flag de codec)
 ├── listenner         ListenActor    → servidor HTTP que recibe los eventos de la cámara
 └── pubsub-actor-XXXX singleton MQTT (lo crea InitPubSub desde counting/Started)
 ```
@@ -318,8 +318,11 @@ orden: hora y NTP, horario de grabación, salud del almacenamiento, perfil de co
 único que puede terminar en un reinicio, así que una cámara que ya falló en algo anterior no
 llega a que se le pida uno.
 
-Todo el bloque está deshabilitado salvo que se pase `-ntpServer`, y como el video exige
-además `-camera` y credenciales. Flags: `-ntpPort` (123), `-ntpInterval` (60m), `-timeZone`
+El actor se crea si se pide **cualquiera** de sus trabajos: `-ntpServer` o alguno de los flags del
+perfil de codificación. Y como el video, exige además `-camera` y credenciales. Adentro cada bloque
+se autolimita: **sin `-ntpServer` no se toca el reloj ni los servidores NTP** —la deriva se mide
+igual, para el reporte— pero el horario de grabación sí se alinea, porque sin grabación no hay
+video que extraer. Flags: `-ntpPort` (123), `-ntpInterval` (60m), `-timeZone`
 (`CST+5:00:00`), `-timeDriftMax` (10s), `-cameraCheckInterval` (30m).
 
 **Corrige la configuración pero NUNCA escribe el reloj.** Escribirlo obliga a pasar por
