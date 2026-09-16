@@ -130,6 +130,25 @@ type CameraActor struct {
 	cancel  func()
 	// startedAt fija el arranque, para el mínimo de encoderMinUptime.
 	startedAt time.Time
+
+	// videoDir y videoMinFree describen el disco del gateway donde se dejan los clips,
+	// no el de la cámara. Se miden acá y no en VideoActor porque este es el actor que ya
+	// publica salud con una cadencia propia: VideoActor solo despierta cuando pasa un
+	// pasajero, y el disco hay que verlo venir aunque no pase nadie.
+	//
+	// Van vacíos si no se configuró -videoDir, y entonces no se mide ni se publica nada.
+	videoDir     string
+	videoMinFree uint64
+	// videoFree son los bytes libres del último ciclo, válidos solo si videoFreeOK.
+	videoFree   uint64
+	videoFreeOK bool
+	// videoDirAlerted evita repetir la alarma del disco en cada ciclo, igual que
+	// storageAlerted hace con el medio de la cámara.
+	videoDirAlerted bool
+	// videoDirPending guarda el estado que falta publicar ("videodir" / "videodir_ok"),
+	// vacío si no hay nada pendiente. El dato es del gateway y no de una cámara, así que
+	// viaja con el primer resultado sano del ciclo en vez de repetirse por cada cámara.
+	videoDirPending string
 }
 
 // camTimeState recuerda lo justo para no repetir logs ni alarmas en cada ciclo.
@@ -217,17 +236,20 @@ type msgCameraResult struct {
 }
 
 // NewCameraActor crea el actor.
-func NewCameraActor(cameras []string, user, pass string, want CameraConfig, interval time.Duration) *CameraActor {
+func NewCameraActor(cameras []string, user, pass string, want CameraConfig, interval time.Duration,
+	videoDir string, videoMinFree uint64) *CameraActor {
 	if interval <= 0 {
 		interval = 30 * time.Minute
 	}
 	a := &CameraActor{
-		cameras:  cameras,
-		user:     user,
-		pass:     pass,
-		want:     want,
-		interval: interval,
-		state:    make(map[int32]*camTimeState),
+		cameras:      cameras,
+		user:         user,
+		pass:         pass,
+		want:         want,
+		interval:     interval,
+		state:        make(map[int32]*camTimeState),
+		videoDir:     videoDir,
+		videoMinFree: videoMinFree,
 	}
 	a.Logger = &Logger{}
 	return a
@@ -320,6 +342,16 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 			encoder bool
 		}{int32(i), host, encoderListo && (st == nil || !st.encoderGiveUp)})
 	}
+	// El disco del gateway se mide acá, una vez por ciclo y en el hilo del actor: es un
+	// Statfs local de microsegundos, no vale una goroutine, y el dato es del equipo y no
+	// de cada cámara.
+	//
+	// Va ANTES del corte por "no hay cámaras que consultar": el disco del gateway se llena
+	// igual aunque todas las cámaras estén bloqueadas por credencial, y esa es justamente
+	// la situación en la que nadie está mirando. Si no hay a qué colgar la publicación,
+	// queda pendiente para el próximo ciclo con un resultado sano — pero el log sale ya.
+	a.medirVideoDir()
+
 	if len(trabajos) == 0 {
 		return
 	}
@@ -342,6 +374,56 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 		// Una marca final para liberar el candado, con door negativo.
 		system.Root.Send(self, &msgCameraResult{door: -1})
 	}()
+}
+
+// medirVideoDir mide el disco donde se dejan los clips, si hay -videoDir configurado.
+func (a *CameraActor) medirVideoDir() {
+	if len(a.videoDir) == 0 {
+		return
+	}
+	libre, err := freeSpace(a.videoDir)
+	if err != nil {
+		// No poder medir no apaga nada: el campo simplemente no viaja en el evento.
+		a.videoFreeOK = false
+		a.buildLog.Printf("no se pudo medir el disco de %s: %s", a.videoDir, err)
+		return
+	}
+	a.videoFree, a.videoFreeOK = libre, true
+	if a.videoMinFree == 0 {
+		return
+	}
+
+	// La alarma se registra acá y no al publicar: si TODAS las cámaras fallan no llega
+	// ningún msgCameraResult sano, y el disco lleno del gateway tiene que verse en el log
+	// igual. La publicación queda pendiente y sale con el primer resultado bueno.
+	switch {
+	case libre < a.videoMinFree && !a.videoDirAlerted:
+		a.videoDirAlerted = true
+		a.videoDirPending = "videodir"
+		a.errLog.Printf("disco de clips %s con %d MB libres, bajo el piso de %d MB: se deja "+
+			"de extraer video. El conteo sigue normal y no se borra ni se sobrescribe ningún "+
+			"clip; hay que sacar de ahí los que ya están grabados",
+			a.videoDir, libre>>20, a.videoMinFree>>20)
+	case libre >= a.videoMinFree && a.videoDirAlerted:
+		a.videoDirAlerted = false
+		a.videoDirPending = "videodir_ok"
+		a.infoLog.Printf("disco de clips %s recuperado: %d MB libres", a.videoDir, libre>>20)
+	}
+}
+
+// reportarVideoDir publica el cruce del piso de disco que dejó pendiente medirVideoDir.
+//
+// Sigue el mismo patrón que el almacenamiento de la cámara (storage / storage_ok): una
+// publicación al cruzar y otra al recuperarse, nunca una por ciclo. La diferencia es que
+// este dato es del gateway y no de una cámara, así que viaja UNA vez, con el primer
+// resultado sano del ciclo, en lugar de repetirse por cada cámara configurada.
+func (a *CameraActor) reportarVideoDir(ctx actor.Context, res *msgCameraResult, st *camTimeState) {
+	if len(a.videoDirPending) == 0 {
+		return
+	}
+	estado := a.videoDirPending
+	a.videoDirPending = ""
+	a.publish(ctx, res, st, estado)
 }
 
 // reference devuelve la hora de referencia y de dónde salió.
@@ -825,6 +907,10 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 		return
 	}
 
+	// El disco del gateway se publica acá: ya hay un resultado sano al que colgarlo, y
+	// sale una sola vez por ciclo aunque haya varias cámaras.
+	a.reportarVideoDir(ctx, res, st)
+
 	for _, f := range res.fixed {
 		a.infoLog.Printf("cámara de la puerta %d (%s) corregida: %s", res.door, res.host, f)
 	}
@@ -981,6 +1067,13 @@ func (a *CameraActor) publish(ctx actor.Context, res *msgCameraResult, st *camTi
 		// Storage solo va cuando se pudo consultar el medio de grabación.
 		Storage       string `json:"storage,omitempty"`
 		StorageFreeMB int    `json:"storage_free_mb,omitempty"`
+		// VideoDirFreeMB es el disco DEL GATEWAY donde se dejan los clips, no el de la
+		// cámara: storage_free_mb es la SD de la cámara y este es /SD del equipo. Va en
+		// todos los CAMERATIME, no solo en el del cruce del piso, porque su valor está en
+		// la tendencia: cuando el piso se cruza ya es tarde, y con la serie completa se ve
+		// venir con semanas de anticipación.
+		VideoDir       string `json:"video_dir,omitempty"`
+		VideoDirFreeMB int    `json:"video_dir_free_mb,omitempty"`
 		// Codec describe el perfil observado. Va en el evento para que la plataforma pueda
 		// detectar de lejos una cámara en H.265 o con SmartCodec activo, que son las dos
 		// condiciones que dejan un clip inservible aunque la extracción "funcione".
@@ -1001,6 +1094,10 @@ func (a *CameraActor) publish(ctx actor.Context, res *msgCameraResult, st *camTi
 	if res.storageChecked {
 		val.Storage = res.storageStatus
 		val.StorageFreeMB = res.storageFreeMB
+	}
+	if a.videoFreeOK {
+		val.VideoDir = a.videoDir
+		val.VideoDirFreeMB = int(a.videoFree >> 20)
 	}
 	if res.codecChecked {
 		val.VideoCodec = res.codecType

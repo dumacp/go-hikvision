@@ -179,7 +179,7 @@ exigen.
 
 Deshabilitada salvo que se pase `-videoDir`, y además exige `-camera` y credenciales: sin las tres
 cosas el actor no se crea y el conteo sigue igual. Flags: `-videoPreRoll` (10s), `-videoDuration`
-(16s), `-videoQueue` (500).
+(16s), `-videoQueue` (500), `-videoMinFree` (512 MiB).
 
 Los defaults de 10 y 16 segundos están medidos, no elegidos: el `dateTime` del evento llega entre
 **2 y 7 segundos después del cruce físico**, y el retraso varía. Con 5 s de pre-roll el cruce
@@ -218,7 +218,22 @@ cortado en el borde.
 El clip y cada sidecar se escriben como `.part` y se **renombran al terminar**: el rename es atómico, así que el
 proceso que recorra el directorio nunca ve un archivo a medio escribir y no hace falta coordinar.
 Este binario **no borra clips** —de eso se encarga quien los suba— pero **deja de extraer** cuando
-el espacio libre baja de 512 MB, porque en la misma partición vive la boltdb del conteo.
+el espacio libre baja del piso de `-videoMinFree` (512 MiB por defecto, `0` lo deshabilita).
+
+**Ante el disco lleno aborta, no sobrescribe.** No hay rotación ni borrado: los nombres llevan el
+`uid` del evento, así que no existe un "más viejo" al que apuntar, y borrarlo sería borrar el que
+lleva más tiempo esperando que lo suban — este binario no sabe cuáles ya se subieron. Se pierde el
+video del paso en curso, sin reintento; el conteo sigue igual. El aviso va **una vez por episodio**
+(`sinEspacioAvisado`) y se rearma al recuperarse: con el disco al tope fallan todos los pasos, y un
+ERROR por evento serían cientos de líneas diarias iguales. Si `Statfs` falla se sigue extrayendo
+—fail-open a propósito— pero ahora deja WARN una vez; antes era silencioso y no se podía auditar.
+
+`CameraActor` mide ese mismo disco una vez por ciclo y lo publica como `video_dir_free_mb` en
+**todos** los `CAMERATIME`, más un evento propio al cruzar el piso (`videodir` / `videodir_ok`),
+con el mismo patrón que `storage`/`storage_ok`. Va ahí y no en `VideoActor` porque este solo
+despierta cuando pasa un pasajero, y el disco hay que verlo venir aunque no pase nadie. El dato es
+del gateway, así que sale **una vez por ciclo**, con el primer resultado sano, no una vez por
+cámara.
 
 Cuatro cosas medidas contra una cámara real que explican el diseño:
 

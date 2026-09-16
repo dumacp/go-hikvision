@@ -37,11 +37,21 @@ const (
 	// 5.7 s, así que un segundo queda holgado respecto del jitter normal y muy por debajo del
 	// problema real.
 	videoMaxGapWarn = 1 * time.Second
-	// videoMinFree es el espacio libre mínimo bajo el cual se deja de extraer. El
-	// binario no borra clips —de eso se encarga quien los suba— pero tampoco puede
-	// llenar el disco, porque en la misma partición vive la boltdb del conteo.
-	videoMinFree = 512 << 20
 )
+
+// VideoMinFreeDefault es el espacio libre mínimo por defecto bajo el cual se deja de
+// extraer, configurable con -videoMinFree.
+//
+// El binario no borra clips —de eso se encarga quien los suba— pero tampoco puede llenar
+// el disco, porque en la misma partición vive la boltdb del conteo: quedarse sin video de
+// un pasajero cuesta un clip, quedarse sin disco cuesta el acumulado del vehículo.
+//
+// Tampoco sobrescribe ni rota: los nombres llevan el uid del evento, así que no hay un
+// "más viejo" al que apuntar, y borrar el clip más antiguo sería borrar justamente el que
+// lleva más tiempo esperando que lo suban. Este binario no sabe cuáles ya se subieron
+// —eso lo sabe quien los sube—, así que ante el disco lleno prefiere perder el video que
+// todavía no existe antes que uno ya grabado.
+const VideoMinFreeDefault = 512 << 20
 
 // VideoActor extrae de la cámara el video de cada paso y lo deja en disco.
 //
@@ -57,12 +67,23 @@ type VideoActor struct {
 	preRoll  time.Duration
 	duration time.Duration
 	maxQueue int
+	// minFree es el piso de espacio libre; 0 deshabilita la comprobación.
+	minFree uint64
 
 	pending  []videoJob
 	working  bool
 	tickPend bool
 	// clockWarned evita repetir el aviso de relojes desfasados en cada evento.
 	clockWarned bool
+	// sinEspacioAvisado evita repetir el aviso del disco lleno en cada evento. Con el
+	// disco al tope fallan TODOS los pasos, así que un mensaje por evento serían cientos
+	// por día diciendo lo mismo, y el aviso se perdería entre sus propias repeticiones.
+	// Se rearma cuando una extracción vuelve a encontrar espacio.
+	sinEspacioAvisado bool
+	// medirWarned evita repetir el aviso de "no se pudo medir el disco". Ese caso sigue
+	// adelante a propósito —no poder medir no es razón para dejar al vehículo sin video—
+	// pero antes lo hacía en silencio, y un fail-open silencioso no se puede auditar.
+	medirWarned bool
 	// lastEvent recuerda la hora del último evento de cada puerta, para saber si los
 	// pasajeros que cuenta un evento caben en la ventana del clip.
 	lastEvent map[int32]time.Time
@@ -104,6 +125,14 @@ type msgVideoDone struct {
 	dest string
 	// sinCobertura distingue "la cámara no tiene ese tramo" de un error real.
 	sinCobertura bool
+	// sinEspacio distingue el disco lleno de un error de extracción: no es una falla de
+	// la cámara ni del recorte, y se avisa una sola vez en vez de por evento.
+	sinEspacio bool
+	// libre son los bytes libres medidos, válidos solo si espacioMedido.
+	libre         uint64
+	espacioMedido bool
+	// medirErr se llena cuando no se pudo medir el disco. La extracción siguió igual.
+	medirErr error
 	// ident es la identidad de la cámara si hubo que consultarla en esta pasada; el
 	// actor la cachea al recibirla.
 	ident camIdent
@@ -123,7 +152,8 @@ type MsgClockStep struct {
 }
 
 // NewVideoActor crea el actor.
-func NewVideoActor(cameras []string, user, pass, dir string, preRoll, duration time.Duration, maxQueue int) *VideoActor {
+func NewVideoActor(cameras []string, user, pass, dir string, preRoll, duration time.Duration,
+	maxQueue int, minFree uint64) *VideoActor {
 	if maxQueue <= 0 {
 		maxQueue = 500
 	}
@@ -135,6 +165,7 @@ func NewVideoActor(cameras []string, user, pass, dir string, preRoll, duration t
 		preRoll:  preRoll,
 		duration: duration,
 		maxQueue: maxQueue,
+		minFree:  minFree,
 	}
 	a.camInfo = make(map[int32]camIdent)
 	a.lastEvent = make(map[int32]time.Time)
@@ -149,8 +180,8 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		a.initLogs()
-		a.infoLog.Printf("actor started \"%s\", dir=%q preRoll=%v duracion=%v cola=%d",
-			ctx.Self().Id, a.dir, a.preRoll, a.duration, a.maxQueue)
+		a.infoLog.Printf("actor started \"%s\", dir=%q preRoll=%v duracion=%v cola=%d piso=%s",
+			ctx.Self().Id, a.dir, a.preRoll, a.duration, a.maxQueue, describeMinFree(a.minFree))
 
 	case *actor.Stopping:
 		a.warnLog.Println("stopped actor")
@@ -187,7 +218,17 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 		if len(msg.ident.serial) > 0 {
 			a.camInfo[anchor.door] = msg.ident
 		}
+		// El disco se informa antes de mirar el resultado de la extracción, porque
+		// condiciona todo lo demás y su aviso no depende de cómo salió este clip.
+		a.reportarEspacio(msg)
+
 		switch {
+		case msg.sinEspacio:
+			// Ya avisado en reportarEspacio; acá solo queda el detalle para -debug. Con el
+			// disco al tope falla TODA extracción, así que un ERROR por evento sería un
+			// mensaje por pasajero repitiendo lo mismo hasta llenar el log.
+			a.buildLog.Printf("sin espacio para el video de la puerta %d (%s, %d evento(s))",
+				anchor.door, anchor.when.Format(time.RFC3339), len(msg.group))
 		case msg.sinCobertura:
 			a.warnLog.Printf("sin grabación para %s en la cámara de la puerta %d, %d evento(s) sin video",
 				anchor.when.Format(time.RFC3339), anchor.door, len(msg.group))
@@ -216,7 +257,55 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 	}
 }
 
-// enqueue agrega el paso a la cola si hay cámara y espacio.
+// reportarEspacio deja constancia del disco una sola vez por transición, no por evento.
+//
+// Las dos condiciones que informa —bajo el piso, y no se pudo medir— afectan a TODOS los
+// pasos por igual, así que repetirlas en cada uno llenaría el log de cientos de líneas
+// idénticas por día y escondería justamente lo que hay que ver. El aviso se rearma cuando
+// una extracción vuelve a encontrar espacio, para que un segundo episodio se note.
+func (a *VideoActor) reportarEspacio(msg *msgVideoDone) {
+	if msg.medirErr != nil {
+		if !a.medirWarned {
+			a.medirWarned = true
+			a.warnLog.Printf("no se pudo medir el espacio libre de %s (%s): se sigue extrayendo "+
+				"igual, pero el piso de %s queda sin vigilar",
+				a.dir, msg.medirErr, describeMinFree(a.minFree))
+		}
+		return
+	}
+	if !msg.espacioMedido {
+		return
+	}
+	a.medirWarned = false
+
+	switch {
+	case msg.sinEspacio:
+		if !a.sinEspacioAvisado {
+			a.sinEspacioAvisado = true
+			a.warnLog.Printf("espacio libre en %s por debajo del piso: %d MB contra %d MB. "+
+				"Se DEJA de extraer video; el conteo y el MQTT siguen normales. No se borra "+
+				"ni se sobrescribe ningún clip: los que están en disco quedan para quien los "+
+				"suba. Este aviso no se repite hasta que haya espacio otra vez",
+				a.dir, msg.libre>>20, a.minFree>>20)
+		}
+	case a.sinEspacioAvisado:
+		a.sinEspacioAvisado = false
+		a.infoLog.Printf("espacio libre en %s recuperado: %d MB, se vuelve a extraer video",
+			a.dir, msg.libre>>20)
+	}
+}
+
+// describeMinFree formatea el piso para los logs, incluido el caso deshabilitado.
+func describeMinFree(minFree uint64) string {
+	if minFree == 0 {
+		return "sin piso de disco"
+	}
+	return fmt.Sprintf("%d MB", minFree>>20)
+}
+
+// enqueue agrega el paso a la cola. NO comprueba el espacio en disco: eso se mide justo
+// antes de cada extracción, en la goroutine, porque entre encolar y extraer pueden pasar
+// minutos de cola y el disco puede haber cambiado.
 func (a *VideoActor) enqueue(ctx actor.Context, msg *messages.Event) {
 	switch msg.GetType() {
 	case messages.Event_INPUT, messages.Event_OUTPUT:
@@ -363,10 +452,21 @@ func (a *VideoActor) next(ctx actor.Context) {
 		defer cancel()
 		done := &msgVideoDone{group: group, dest: clip}
 
-		if libre, err := freeSpace(a.dir); err == nil && libre < videoMinFree {
-			done.err = fmt.Errorf("espacio libre insuficiente en %s: %d MB", a.dir, libre>>20)
+		// El disco se mide antes de cada extracción. Tres desenlaces, y los tres se
+		// informan: no poder medir NO detiene la extracción —dejar al vehículo sin video
+		// porque falló un Statfs es peor que el riesgo que evita— pero sí queda avisado,
+		// porque un fail-open silencioso no se puede auditar después.
+		libre, errLibre := freeSpace(a.dir)
+		switch {
+		case errLibre != nil:
+			done.medirErr = errLibre
+		case a.minFree > 0 && libre < a.minFree:
+			done.sinEspacio = true
+			done.libre, done.espacioMedido = libre, true
 			system.Root.Send(self, done)
 			return
+		default:
+			done.libre, done.espacioMedido = libre, true
 		}
 
 		// Guarda imprescindible: pedir un instante sin grabación no da error, devuelve

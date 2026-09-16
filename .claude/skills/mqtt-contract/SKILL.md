@@ -115,14 +115,16 @@ cuando detecta que su reloj derivó:
           "time_mode":"NTP","ntp_server":"ntp2.inm.gov.co","ntp_interval_min":60,
           "fixed":["codificación: SmartCodec -> false"],
           "storage":"ok","storage_free_mb":2304,
+          "video_dir":"/SD/video","video_dir_free_mb":6842,
           "video_codec":"H.264","video_fps":20,"smart_codec":true}}
 ```
 
 - `status` es `fixed` (se corrigió algo), `drift` (el reloj derivó más de `-timeDriftMax` durante
   tres ciclos), `ok` (volvió a hora después de haber alarmado), `storage` / `storage_ok` (el medio
   de grabación dejó de servir o se recuperó), `encoder_rejected` (un valor del perfil se escribió
-  con OK y la cámara no lo guardó — el flag pide algo que el modelo no admite) o `reboot` (se está reiniciando la cámara para
-  aplicar el perfil de codificación).
+  con OK y la cámara no lo guardó — el flag pide algo que el modelo no admite), `videodir` /
+  `videodir_ok` (el disco del GATEWAY donde se dejan los clips cruzó el piso de `-videoMinFree`, o
+  se recuperó) o `reboot` (se está reiniciando la cámara para aplicar el perfil de codificación).
 - **`reboot` y `fixed` no salen los dos por el mismo cambio.** Cuando hay reinicio se publica solo
   `reboot`, que lleva el mismo arreglo en `fixed` y además avisa que la cámara se va a caer un
   momento. Dos mensajes para un cambio obligarían al consumidor a deduplicar.
@@ -133,6 +135,18 @@ cuando detecta que su reloj derivó:
   `smart_codec: true` sí anticipa clips congelados.
 - `storage` y `storage_free_mb` (en MB) aparecen cuando se pudo consultar el medio. `storage`
   distinto de `ok` es la condición que hace imposible extraer **cualquier** clip.
+- **`video_dir_free_mb` no es `storage_free_mb`.** `storage_free_mb` es la SD **de la cámara**, que
+  es de donde se lee la grabación; `video_dir_free_mb` es el disco **del gateway** (`/SD`), que es
+  donde se escribe el clip. Dos discos distintos, dos fallas distintas: la SD de la cámara llena
+  significa que no hay qué extraer, el disco del gateway lleno significa que no hay dónde ponerlo.
+- **`video_dir_free_mb` viaja en TODOS los `CAMERATIME`**, no solo cuando el disco falla, y esa es
+  la diferencia que lo hace útil: cuando el piso se cruza ya es tarde, y solo con la serie completa
+  se ve venir la tendencia con semanas de anticipación. Aparece si hay `-videoDir` configurado y se
+  pudo medir. Al cruzar el piso se publica además un `videodir` propio, con el mismo patrón de
+  `storage` — una publicación al cruzar, otra al recuperarse, ninguna en el medio.
+- **Un `videodir` sale UNA vez por ciclo, no una por cámara.** El disco es del gateway, así que el
+  evento viaja con el primer resultado sano del ciclo; el `id` que lleva es el de esa cámara y no
+  significa que el problema sea de ella.
 - `ntp_reachable` aparece **solo cuando hubo deriva**: el test del servidor se consulta nada más
   en ese caso, para distinguir problema de red de problema de reloj. Su ausencia no significa
   que el servidor esté mal.

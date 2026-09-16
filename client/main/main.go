@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.37"
+	showVersion = "1.0.38"
 )
 
 var debug bool
@@ -32,6 +32,7 @@ var videoDir string
 var videoPreRoll time.Duration
 var videoDuration time.Duration
 var videoQueue int
+var videoMinFreeMB int64
 
 var ntpServer string
 var ntpPort int
@@ -83,6 +84,12 @@ func init() {
 	flag.DurationVar(&videoDuration, "videoDuration", 16*time.Second, "clip duration")
 	flag.IntVar(&videoQueue, "videoQueue", 500,
 		"maximum pending extractions; playback runs in real time, so a burst queues up")
+	// El piso protege la boltdb del conteo, que vive en la misma partición: quedarse sin
+	// video de un pasajero cuesta un clip, quedarse sin disco cuesta el acumulado del
+	// vehículo entero. Bajo el piso se deja de extraer, nunca se borra ni se sobrescribe.
+	flag.Int64Var(&videoMinFreeMB, "videoMinFree", client.VideoMinFreeDefault>>20,
+		"free space floor in MiB on the -videoDir partition; below it the extraction stops "+
+			"(no clip is ever deleted or overwritten). 0 disables the check")
 	flag.StringVar(&ntpServer, "ntpServer", "",
 		"NTP server the cameras must use; empty disables the time and NTP maintenance")
 	flag.IntVar(&ntpPort, "ntpPort", 123, "NTP server port")
@@ -191,6 +198,10 @@ func main() {
 	if encoderMinUptime < 0 {
 		log.Fatalf("-encoderMinUptime %v no puede ser negativo", encoderMinUptime)
 	}
+	if videoMinFreeMB < 0 {
+		log.Fatalf("-videoMinFree %d no puede ser negativo", videoMinFreeMB)
+	}
+	videoMinFree := uint64(videoMinFreeMB) << 20
 
 	// Credentials are only needed to talk to the camera, so a missing or unreadable
 	// value must not stop the counting: warn and keep going.
@@ -250,14 +261,21 @@ func main() {
 		warnlog.Printf("video extraction disabled: -videoDir is set but %s is not usable", envCredentials)
 	default:
 		vid := client.NewVideoActor(camerasByDoor, camUser, camPass, videoDir,
-			videoPreRoll, videoDuration, videoQueue)
+			videoPreRoll, videoDuration, videoQueue, videoMinFree)
 		vid.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 		if debug {
 			vid.WithDebug()
 		}
 		counting.SetVideoProps(actor.PropsFromProducer(func() actor.Actor { return vid }))
-		infolog.Printf("video extraction enabled: dir=%q preRoll=%v duration=%v queue=%d",
-			videoDir, videoPreRoll, videoDuration, videoQueue)
+		infolog.Printf("video extraction enabled: dir=%q preRoll=%v duration=%v queue=%d minFree=%d MB",
+			videoDir, videoPreRoll, videoDuration, videoQueue, videoMinFree>>20)
+		// Vale avisarlo fuerte: sin piso, la extracción llena la partición hasta el final,
+		// y ahí vive la boltdb del conteo. Se pierde el acumulado del vehículo, que es
+		// mucho más caro que perder unos clips.
+		if videoMinFree == 0 {
+			warnlog.Printf("-videoMinFree 0: SIN piso de disco. La extracción va a llenar %q "+
+				"hasta el último byte, y en esa partición está la base del conteo", videoDir)
+		}
 	}
 
 	// El actor de cámara se crea si se pide CUALQUIERA de sus trabajos: el mantenimiento de
@@ -294,7 +312,7 @@ func main() {
 			Quality:          videoQuality,
 			BitrateMax:       videoBitrateMax,
 			EncoderMinUptime: encoderMinUptime,
-		}, cameraCheckInterval)
+		}, cameraCheckInterval, videoDir, videoMinFree)
 		cam.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 		if debug {
 			cam.WithDebug()

@@ -131,6 +131,7 @@ el actor no se crea y el conteo sigue igual.
 | `-videoPreRoll` | `10s` | cuánto video guardar antes del evento |
 | `-videoDuration` | `16s` | duración del clip |
 | `-videoQueue` | `500` | extracciones pendientes máximas |
+| `-videoMinFree` | `512` | piso de espacio libre en MiB; bajo él se deja de extraer. `0` lo deshabilita |
 
 Los 10 segundos de pre-roll no son arbitrarios: el `dateTime` del evento llega entre **2 y 7
 segundos después** del cruce físico, y el retraso varía. Con menos, el cruce queda en el borde del
@@ -447,9 +448,39 @@ El clip y cada archivo de datos se escriben como `.part` y se **renombran al ter
 es atómico, así que un proceso que recorra el directorio nunca ve un archivo a medio escribir y no
 hace falta coordinar.
 
+### Qué pasa cuando el disco se llena
+
 Este binario **no borra clips** — de eso se encarga el proceso que los suba — pero **deja de
-extraer** cuando el espacio libre baja de 512 MB, porque en la misma partición vive la base de
-datos del conteo.
+extraer** cuando el espacio libre baja del piso de `-videoMinFree` (512 MiB por defecto), porque en
+la misma partición vive la base de datos del conteo.
+
+**No sobrescribe, no rota y no borra nada.** Aborta la extracción del paso en curso y sigue. El
+video de ese pasajero se pierde; no hay reintento. El conteo, el MQTT y todo lo demás siguen
+normales.
+
+Es deliberado: este binario **no sabe cuáles clips ya se subieron** — eso lo sabe el proceso que
+los sube. Borrar "el más viejo" para hacer sitio sería borrar justamente el que lleva más tiempo
+esperando, el que con más probabilidad nunca llegó al repositorio. Prefiere perder el video que
+todavía no existe antes que uno ya grabado. Y la prioridad real es la base del conteo: quedarse sin
+video cuesta un clip, quedarse sin disco cuesta el acumulado del vehículo entero.
+
+Se avisa **una sola vez** por episodio, no una vez por pasajero — con el disco al tope fallan todas
+las extracciones, y un mensaje por evento serían cientos de líneas diarias idénticas:
+
+```
+[ warn ] espacio libre en /SD/video por debajo del piso: 480 MB contra 512 MB. Se DEJA de
+         extraer video; el conteo y el MQTT siguen normales. No se borra ni se sobrescribe
+         ningún clip...
+[ info ] espacio libre en /SD/video recuperado: 900 MB, se vuelve a extraer video
+```
+
+Con `-ntpServer` o algún flag de codec, el espacio libre viaja además en cada evento `CAMERATIME`
+como `video_dir_free_mb`, y el cruce del piso publica un evento propio (`videodir` /
+`videodir_ok`). Sirve para ver venir el problema con semanas de anticipación, que es cuando todavía
+se puede hacer algo.
+
+> `-videoMinFree 0` desactiva el piso. El binario avisa al arrancar, porque entonces llena la
+> partición hasta el último byte y ahí vive la base del conteo.
 
 ---
 
