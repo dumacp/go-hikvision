@@ -21,9 +21,29 @@ go run ./client/main -logStd -debug -socket :8088 -pathdb /tmp/countingdb \
 cd client/messages && ./protobuf.sh
 ```
 
-**Dependencias por `replace`**: el `go.mod` apunta a repos hermanos en el filesystem
-(`../go-doors`, `../go-actors`, `../../asynkron/protoactor-go`). Sin ellos no compila;
-no sustituyas esos `replace` por versiones remotas sin acordarlo.
+**Dependencias**: `go-doors` y `go-actors` se consumen por versión publicada (`v1.2.1` y
+`v0.1.0`); antes iban por `replace` al filesystem y ya no hace falta tenerlos clonados.
+
+**Queda UN `replace`, y es obligatorio**: `github.com/asynkron/protoactor-go => ../../asynkron/protoactor-go`.
+El checkout local lleva dos parches que no existen en ningún commit publicado, y uno de ellos
+**evita un panic en armv7**, que es la arquitectura de destino:
+
+```go
+// actor/process_registry.go — SliceMap.GetBucket
+index = (int(hash) & 0x7FFFFFFF) % len(s.LocalPIDs)   // el parche
+```
+
+En ARM `int` es de 32 bits, así que un hash murmur32 mayor a 2³¹ se vuelve **negativo** al
+convertirlo y `s.LocalPIDs[índice]` hace `index out of range`. Medido: **el 50% de los nombres**
+cae en índice negativo, incluidos `counting/video`, `counting/events`, `counting/doors` y
+`counting/ping`, que son los de este binario. En un equipo de 64 bits no se ve nunca. Upstream
+sigue sin arreglarlo (verificado contra la rama `dev`) y no hay issue abierto. El segundo parche
+—el `if err != nil` de `remote/proto_serializer.go`— **sí** lo adoptaron upstream y ya no haría
+falta con una versión nueva.
+
+**No quites ese `replace`.** Quitarlo compila y pasa los tests en el equipo de desarrollo, y el
+binario entra en panic al arrancar en el vehículo. La salida de fondo es publicar un fork con el
+parche; mientras tanto, el clon local es la dependencia.
 
 **Versión**: la constante `showVersion` en [client/main/main.go](client/main/main.go#L19) es la
 única fuente de versión. **No la subas por tu cuenta.** Se sube cuando hay acuerdo de que lo que
