@@ -18,6 +18,12 @@ const (
 type EventActor struct {
 	*Logger
 	puertas map[uint]uint
+	// withoutEventID omite el campo event_id del COUNTERSDOOR.
+	//
+	// Es una compuerta de compatibilidad, no una opción de producto: existe solo
+	// mientras la plataforma no sepa procesar ese campo. Se quita el día que la
+	// plataforma lo acepte, y entonces el binario corre sin el flag.
+	withoutEventID bool
 }
 
 // NewEventActor create EventActor
@@ -27,6 +33,9 @@ func NewEventActor() *EventActor {
 	event.puertas = make(map[uint]uint)
 	return event
 }
+
+// SetWithoutEventID omite event_id en el COUNTERSDOOR. Ver el campo homónimo.
+func (act *EventActor) SetWithoutEventID(v bool) { act.withoutEventID = v }
 
 type msgEvent struct {
 	data []byte
@@ -55,10 +64,10 @@ func (act *EventActor) Receive(ctx actor.Context) {
 		switch msg.Type {
 		case messages.Event_INPUT:
 
-			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger)
+			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger, act.withoutEventID)
 			ctx.Send(ctx.Parent(), &msgEvent{data: event})
 		case messages.Event_OUTPUT:
-			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger)
+			event = buildEventPass(ctx, msg, frame, act.puertas, act.Logger, act.withoutEventID)
 			ctx.Send(ctx.Parent(), &msgEvent{data: event})
 		case messages.Event_TAMPERING:
 			event = buildEventTampering(ctx, msg, frame, act.puertas, act.Logger)
@@ -73,7 +82,8 @@ func (act *EventActor) Receive(ctx actor.Context) {
 	}
 }
 
-func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map[uint]uint, log *Logger) []byte {
+func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map[uint]uint,
+	log *Logger, withoutEventID bool) []byte {
 	// tn := time.Now()
 
 	// log.buildLog.Printf("memorys, %v, %v", mem1, mem2)
@@ -96,6 +106,11 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 		Type:      "COUNTERSDOOR",
 	}
 
+	uid := v.GetUid()
+	if withoutEventID {
+		uid = ""
+	}
+
 	val := struct {
 		Coord    string  `json:"coord"`
 		ID       int     `json:"id"`
@@ -104,7 +119,13 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 		Type     string  `json:"type,omitempty"`
 		// EventID es la llave con la que la plataforma une este paso con el evento
 		// COUNTERSDOORVIDEO que llega después, cuando el clip ya está en disco. Se
-		// omite si el paso no lo trae, como los replicados de una boltdb anterior.
+		// omite si el paso no lo trae, como los replicados de una boltdb anterior,
+		// y también con -withoutEventID mientras la plataforma no sepa procesarlo.
+		//
+		// El omitempty es lo que hace innecesario un segundo struct: basta con no
+		// rellenar el campo y el JSON sale exactamente como antes de 1.0.32, byte
+		// por byte. Un struct alterno abriría la puerta a que las dos formas se
+		// separen con el tiempo sin que nadie lo note.
 		EventID string `json:"event_id,omitempty"`
 	}{
 		frame,
@@ -112,7 +133,7 @@ func buildEventPass(ctx actor.Context, v *messages.Event, gps string, puerta map
 		doorState,
 		contadores[0:2],
 		"CAMERA",
-		v.GetUid(),
+		uid,
 	}
 	message.Value = val
 

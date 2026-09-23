@@ -325,6 +325,24 @@ segundo mensaje confirma un hecho. Si no llega, ese paso no tiene video, sin amb
 Va un `COUNTERSDOORVIDEO` **por evento** aunque varios compartan el clip, para que el cruce del otro
 lado sea 1 a 1 por `event_id` y no haya que desarmar listas.
 
+**`-withoutEventID` omite ese campo del `COUNTERSDOOR`**, devolviéndolo al formato anterior a
+1.0.32. Es una compuerta de compatibilidad con la plataforma, temporal y con fecha de retiro: se
+agregó porque la plataforma rechazaba el mensaje al ver el campo nuevo, y sin ella no había forma de
+probar el resto del binario en un vehículo sin romperle el conteo. Mientras está activo **el cruce
+conteo↔video es imposible**, porque `event_id` es la llave. No toca el `COUNTERSDOORVIDEO`, que va
+por otro tópico (`EVENTS/counterevents`) y todavía nadie consume.
+
+Se implementa **no rellenando el campo**, que ya tenía `omitempty`, y no con un struct alterno: así
+el JSON sale byte por byte como antes y las dos formas no pueden separarse con el tiempo sin que
+nadie lo note. Hay una prueba que compara el conjunto de claves de las dos formas y falla si la
+diferencia es algo más que `event_id`.
+
+**Verificado al agregarlo**: `event_id` es el **único** campo nuevo en los mensajes desde 1.0.32 —
+se comparó el conjunto de etiquetas `json:` de `events-actor.go`, `counting-actor.go` y
+`doors-actor.go` contra `3d14a25`, la versión anterior. Lo que sí es nuevo son dos **tipos** de
+mensaje completos, `CAMERATIME` y `COUNTERSDOORVIDEO`, pero van a `EVENTS/counterevents` y no al
+`EVENTS/backcounter` que consume la plataforma.
+
 ### Mantenimiento de las cámaras (`-ntpServer`)
 
 Un solo actor (`CameraActor`) y un solo ciclo hacen **cinco** cosas por cámara, en este

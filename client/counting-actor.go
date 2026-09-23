@@ -41,6 +41,10 @@ type CountingActor struct {
 	// videoProps y cameraProps quedan nil si esas funciones no se configuraron.
 	videoProps  *actor.Props
 	cameraProps *actor.Props
+
+	// withoutEventID se pasa a EventActor al crearlo. Compuerta temporal de
+	// compatibilidad con la plataforma; ver EventActor.withoutEventID.
+	withoutEventID bool
 }
 
 // SetCameraProps habilita el mantenimiento de hora y NTP de las cámaras.
@@ -99,6 +103,11 @@ func NewCountingActor() *CountingActor {
 	return count
 }
 
+// SetWithoutEventID omite el campo event_id en el COUNTERSDOOR publicado.
+//
+// Compuerta de compatibilidad con la plataforma, temporal. Ver EventActor.
+func (a *CountingActor) SetWithoutEventID(v bool) { a.withoutEventID = v }
+
 // SetZeroOpenState set the open state in gpio door
 func (a *CountingActor) SetZeroOpenState(id int, state bool) {
 	if state {
@@ -130,6 +139,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		time.Sleep(3 * time.Second)
 
 		events := NewEventActor()
+		events.SetWithoutEventID(a.withoutEventID)
 		events.SetLogError(a.errLog).
 			SetLogWarn(a.warnLog).
 			SetLogInfo(a.infoLog).

@@ -86,6 +86,15 @@ sigue funcionando.
 | `-logxml` | off | guarda el XML recibido en `/SD/logs/camera*` |
 | `-version` | | imprime la versión y termina |
 | `-encryptCredentials` | | genera el valor de `HIKVISION_CREDENTIALS` |
+| `-withoutEventID` | off | omite `event_id` del `COUNTERSDOOR`; compatibilidad temporal |
+
+> **`-withoutEventID` es una compuerta temporal, no una opción de producto.** Devuelve el
+> `COUNTERSDOOR` al formato anterior a 1.0.32, para plataformas que todavía no saben procesar el
+> campo `event_id`. Mientras esté activo, la plataforma **no puede cruzar el paso con su video**:
+> `event_id` es justamente la llave de ese cruce. Se quita el día que la plataforma acepte el
+> campo; entonces el binario corre sin el flag y no hace falta recompilar.
+>
+> El binario deja un WARN en cada arranque mientras el flag esté puesto.
 
 ### Conteo
 

@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.38"
+	showVersion = "1.0.39"
 )
 
 var debug bool
@@ -33,6 +33,7 @@ var videoPreRoll time.Duration
 var videoDuration time.Duration
 var videoQueue int
 var videoMinFreeMB int64
+var withoutEventID bool
 
 var ntpServer string
 var ntpPort int
@@ -56,6 +57,13 @@ var cameras cameraFlags
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
+	// Compuerta de compatibilidad, temporal y a propósito: la plataforma todavía no
+	// procesa los mensajes que traen event_id, y sin este flag no hay forma de probar
+	// el resto del binario en un vehículo real sin romperle el conteo a la plataforma.
+	// Se quita el día que la plataforma lo acepte; entonces el binario corre sin él.
+	flag.BoolVar(&withoutEventID, "withoutEventID", false,
+		"omit the event_id field from the published COUNTERSDOOR; temporary compatibility "+
+			"switch for platforms that cannot yet process it")
 	flag.BoolVar(&logStd, "logStd", false, "log in stderr")
 	flag.StringVar(&socket, "socket", ":8088", "socket to listen events")
 	flag.StringVar(&pathdb, "pathdb", "/SD/boltdbs/countingdb", "socket to listen events")
@@ -243,6 +251,15 @@ func main() {
 	counting := client.NewCountingActor()
 	applyDoorBool(isZeroOpenState, counting.SetZeroOpenState)
 	applyDoorBool(enableCountWithCloseDoor, counting.SetCountCloseDoor)
+	counting.SetWithoutEventID(withoutEventID)
+	// Se avisa en WARN y no en INFO porque es una regresión deliberada del formato: el
+	// paso se publica sin la llave que lo une con su video, y quien lea el log meses
+	// después tiene que poder ver que el binario corría capado a propósito.
+	if withoutEventID {
+		warnlog.Println("-withoutEventID: el COUNTERSDOOR sale SIN event_id, formato previo " +
+			"a 1.0.32. La plataforma no va a poder cruzar el paso con su video. " +
+			"Quitá el flag cuando la plataforma acepte el campo")
+	}
 	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).
 		SetLogBuild(buildlog)
 	if debug {

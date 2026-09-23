@@ -57,6 +57,15 @@ Paso validado (`type: "COUNTERSDOOR"`), de `buildEventPass`:
 - `event_id` identifica este paso de forma inequívoca y es la llave para unirlo con su video, que
   llega después en `COUNTERSDOORVIDEO`. Lleva `omitempty`: un evento replicado de una boltdb
   anterior a este campo no trae uid y entonces la clave no aparece.
+- **`event_id` es el ÚNICO campo agregado a este tópico desde 1.0.32**, verificado comparando las
+  etiquetas `json:` contra la versión anterior. Lo nuevo que sí hay son dos tipos de mensaje
+  completos, `CAMERATIME` y `COUNTERSDOORVIDEO`, y los dos van a **otro tópico**
+  (`EVENTS/counterevents`). Un consumidor de `EVENTS/backcounter` no los ve.
+- **`-withoutEventID` omite la clave** y devuelve el mensaje al formato previo a 1.0.32, byte por
+  byte. Es una compuerta de compatibilidad temporal para una plataforma que rechaza el mensaje al
+  ver el campo nuevo. Mientras esté activa **no se puede cruzar el paso con su video**, porque esa
+  es la llave; el `COUNTERSDOORVIDEO` se sigue publicando intacto, pero queda huérfano del lado de
+  la plataforma. El binario deja WARN en cada arranque mientras el flag esté puesto.
 - `state` = estado de la puerta conocido por `EventActor` (`0` si nunca llegó un `MsgDoor`).
 - `coord` = trama `$GPRMC` cruda, o `""` si el GPS no respondió en 180 ms o está viejo (>30 s).
 
