@@ -216,6 +216,8 @@ type msgCameraResult struct {
 	storageStatus  string
 	storageFreeMB  int
 	storageChecked bool
+	// loopEnable es la sobrescritura cíclica observada; nil si la cámara no la reportó.
+	loopEnable *bool
 
 	// codec describe lo observado en el perfil de codificación. codecType se reporta y
 	// nunca se escribe: video/extract.go solo sabe H.264, así que cambiarlo a H.265 desde
@@ -563,14 +565,24 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 		}
 	}
 
+	// El track se descarga UNA sola vez por ciclo: sirve para el horario de grabación y
+	// para leer LoopEnable, y son el mismo documento. Pedirlo dos veces sería un GET de más
+	// por cámara cada media hora, para nada.
+	//
+	// Que falle solo detiene el ciclo si había horario que alinear. Sin horario
+	// configurado, no poder leer el track no es razón para abandonar el resto de las
+	// comprobaciones: LoopEnable queda sin mirar y se sigue.
+	trackRaw, errTrack := cli.GetTrackRaw(ctx, videoTrack)
+
 	// Horario de grabación. Se aplica en caliente: verificado que responde statusCode 1 y
 	// queda activo sin reiniciar, a diferencia de la configuración del encoder.
 	if len(a.want.RecordStart) > 0 && len(a.want.RecordEnd) > 0 {
-		if raw, err := cli.GetTrackRaw(ctx, videoTrack); err != nil {
-			res.err = fmt.Errorf("leyendo el horario de grabación: %w", err)
-			res.unauthorized = errors.Is(err, isapi.ErrUnauthorized)
+		if errTrack != nil {
+			res.err = fmt.Errorf("leyendo el horario de grabación: %w", errTrack)
+			res.unauthorized = errors.Is(errTrack, isapi.ErrUnauthorized)
 			return res
-		} else if nuevo, cambios, err := isapi.SetScheduleWindow(raw, a.want.RecordStart, a.want.RecordEnd); err != nil {
+		}
+		if nuevo, cambios, err := isapi.SetScheduleWindow(trackRaw, a.want.RecordStart, a.want.RecordEnd); err != nil {
 			res.err = fmt.Errorf("armando el horario: %w", err)
 			return res
 		} else if cambios > 0 {
@@ -581,18 +593,44 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 			}
 			res.fixed = append(res.fixed, fmt.Sprintf("horario de grabación -> %s a %s (%d ventana(s))",
 				a.want.RecordStart, a.want.RecordEnd, cambios))
+			trackRaw = nuevo
 		}
 	}
 
 	// Almacenamiento. No se formatea nunca: borra todo lo grabado y esa no es una decisión
 	// para un binario, igual que el reinicio. Solo se reporta, porque una SD sin formatear
 	// hace que ningún clip se pueda extraer y sin este aviso se culparía al extractor.
-	if st, err := cli.GetStorage(ctx); err == nil && len(st.HDDs) > 0 {
-		h := st.HDDs[0]
-		res.storageChecked = true
-		res.storageOK = h.Healthy()
-		res.storageStatus = h.Status
-		res.storageFreeMB = h.FreeSpace
+	if st, err := cli.GetStorage(ctx); err == nil {
+		if h, ok := st.Primero(); ok {
+			res.storageChecked = true
+			res.storageOK = h.Healthy()
+			res.storageStatus = h.Status
+			res.storageFreeMB = h.FreeSpace
+		}
+	}
+
+	// Sobrescritura cíclica. Es la diferencia entre "la SD está llena" como operación
+	// normal y como falla:
+	//
+	//   LoopEnable true  -> al llenarse borra lo más viejo y sigue grabando. El espacio
+	//                       libre tendiendo a cero es lo NORMAL en una cámara sana, y
+	//                       alarmar por eso daría un falso positivo en toda la flota.
+	//   LoopEnable false -> al llenarse DEJA de grabar, y desde ahí ningún evento tiene
+	//                       video. Eso sí es una falla, y se ve venir el día uno.
+	//
+	// Por eso la alarma mira la configuración y no el espacio libre. Medido en el
+	// DS-2XM6825G0 de laboratorio: LoopEnable true, 1536 MB libres de 7695.
+	//
+	// No pisa un estado peor: si la SD ya viene "unformatted", ese es el problema que hay
+	// que reportar, no este.
+	if errTrack == nil {
+		if loop, vino := isapi.LoopEnabledFrom(trackRaw); vino {
+			res.loopEnable = &loop
+			if !loop && res.storageOK {
+				res.storageOK = false
+				res.storageStatus = isapi.StatusNoOverwrite
+			}
+		}
 	}
 
 	// Perfil de codificación. Va al final a propósito: es el único cambio que exige
@@ -958,11 +996,26 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 	// El almacenamiento se reporta antes que la deriva: sin medio de grabación no hay
 	// video para ningún evento, y es un problema más grave que un reloj corrido.
 	if res.storageChecked {
+		// Con -debug queda la constancia de que la comprobación corrió y qué vio. Sin
+		// esto, "no alarmó" y "no se revisó" se ven exactamente igual en el log.
+		a.buildLog.Printf("cámara de la puerta %d: almacenamiento %q, %d MB libres, sobrescritura %s",
+			res.door, res.storageStatus, res.storageFreeMB, describeLoop(res.loopEnable))
 		if !res.storageOK && !st.storageAlerted {
 			st.storageAlerted = true
-			a.errLog.Printf("cámara de la puerta %d (%s): almacenamiento en %q, no está grabando. "+
-				"Ningún clip se va a poder extraer hasta que se formatee (no lo hace este binario)",
-				res.door, res.host, res.storageStatus)
+			// Las dos fallas piden acciones distintas, así que el log las separa aunque
+			// el evento sea el mismo: formatear no arregla una sobrescritura apagada, y
+			// encender la sobrescritura no arregla una SD rota.
+			if res.storageStatus == isapi.StatusNoOverwrite {
+				a.errLog.Printf("cámara de la puerta %d (%s): la sobrescritura cíclica está "+
+					"APAGADA (%d MB libres de la SD). Cuando se llene va a dejar de grabar y "+
+					"ningún evento va a tener video. Se arregla habilitando LoopEnable en la "+
+					"cámara; este binario no lo cambia",
+					res.door, res.host, res.storageFreeMB)
+			} else {
+				a.errLog.Printf("cámara de la puerta %d (%s): almacenamiento en %q, no está grabando. "+
+					"Ningún clip se va a poder extraer hasta que se formatee (no lo hace este binario)",
+					res.door, res.host, res.storageStatus)
+			}
 			a.publish(ctx, res, st, "storage")
 		} else if res.storageOK && st.storageAlerted {
 			st.storageAlerted = false
@@ -1116,6 +1169,17 @@ func (a *CameraActor) publish(ctx actor.Context, res *msgCameraResult, st *camTi
 	}
 	a.buildLog.Printf("%s", data)
 	ctx.Send(ctx.Parent(), &msgAddEvent{data: data})
+}
+
+// describeLoop formatea la sobrescritura para el log, incluido el caso "no la reportó".
+func describeLoop(v *bool) string {
+	if v == nil {
+		return "sin dato"
+	}
+	if *v {
+		return "encendida"
+	}
+	return "APAGADA"
 }
 
 // rebootRequired indica si el dispositivo aplicó el cambio pero pide reinicio.

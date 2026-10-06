@@ -24,6 +24,33 @@ type HDD struct {
 // Healthy indica si el medio sirve para grabar.
 func (h HDD) Healthy() bool { return strings.EqualFold(h.Status, "ok") }
 
+// StatusNoOverwrite es el valor que el actor pone en el campo `storage` del evento cuando
+// la cámara tiene la sobrescritura cíclica apagada.
+//
+// Es un VALOR nuevo en un campo que ya era de texto libre —la cámara devuelve ahí "ok",
+// "unformatted", "error", "idle"—, no una clave nueva en el JSON. Esa distinción es
+// deliberada: la forma del mensaje no cambia, así que un consumidor que trate `storage`
+// como texto no se entera de nada.
+const StatusNoOverwrite = "nooverwrite"
+
+// Primero devuelve el medio que conviene reportar: el primero que NO esté sano, o el
+// primero a secas si todos lo están.
+//
+// Se miran todos y no solo HDDs[0] porque la cámara verificada devuelve la lista con
+// size="8": hoy trae un medio, pero con dos el segundo quedaba invisible y una SD rota
+// podía pasar inadvertida mientras la primera estaba bien.
+func (s *StorageStatus) Primero() (HDD, bool) {
+	if len(s.HDDs) == 0 {
+		return HDD{}, false
+	}
+	for _, h := range s.HDDs {
+		if !h.Healthy() {
+			return h, true
+		}
+	}
+	return s.HDDs[0], true
+}
+
 // StorageStatus es la respuesta de /ISAPI/ContentMgmt/Storage.
 type StorageStatus struct {
 	XMLName xml.Name `xml:"storage"`
@@ -50,6 +77,13 @@ type Track struct {
 	XMLName xml.Name `xml:"Track"`
 	ID      int      `xml:"id"`
 	Enable  bool     `xml:"Enable"`
+	// LoopEnable es la sobrescritura cíclica. Con `true` la cámara borra lo más viejo al
+	// llenarse y graba para siempre; con `false` **deja de grabar** cuando se llena, y a
+	// partir de ahí ningún evento tiene video.
+	//
+	// Es un puntero para distinguir "la cámara dijo false" de "el campo no vino": un
+	// modelo que no lo reporte no debe disparar una alarma por omisión.
+	LoopEnable *bool `xml:"LoopEnable"`
 	// Schedule son las ventanas por día, en el orden en que vienen.
 	Schedule []ScheduleAction `xml:"TrackSchedule>ScheduleBlock>ScheduleAction"`
 }
@@ -75,6 +109,18 @@ func (c *Client) GetTrack(ctx context.Context, track int) (*Track, error) {
 // GetTrackRaw devuelve el XML crudo del track, para poder reescribirlo sin perder campos.
 func (c *Client) GetTrackRaw(ctx context.Context, track int) ([]byte, error) {
 	return c.do(ctx, "GET", fmt.Sprintf("/ISAPI/ContentMgmt/record/tracks/%d", track), nil)
+}
+
+// LoopEnabledFrom lee la sobrescritura cíclica del XML crudo del track, para no pedir dos
+// veces el mismo documento: el ciclo ya lo descarga para el horario de grabación.
+//
+// Devuelve (valor, true) si el campo vino, y (false, false) si no está o el XML no parsea.
+func LoopEnabledFrom(raw []byte) (bool, bool) {
+	var t Track
+	if err := xml.Unmarshal(raw, &t); err != nil || t.LoopEnable == nil {
+		return false, false
+	}
+	return *t.LoopEnable, true
 }
 
 // PutTrackRaw escribe el XML del track tal cual.

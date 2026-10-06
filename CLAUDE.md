@@ -435,7 +435,35 @@ borraría todo lo demás.
 El almacenamiento (`/ISAPI/ContentMgmt/Storage`) solo se **reporta**, nunca se formatea:
 formatear borra todo lo grabado y esa no es decisión de un binario. Vale la pena porque una SD
 en `unformatted` hace que **ningún** clip se pueda extraer, y sin este aviso se culparía al
-extractor. Va al evento `CAMERATIME` como `storage` y `storage_free_mb`.
+extractor. Va al evento `CAMERATIME` como `storage` y `storage_free_mb`, con el estado
+`storage` al fallar y `storage_ok` al recuperarse — una publicación por transición, nunca por
+ciclo.
+
+**Se revisan TODOS los medios, no solo el primero** (`StorageStatus.Primero` devuelve el primero
+que no esté sano). La cámara verificada reporta la lista con `size="8"` aunque traiga uno solo;
+con dos, una SD rota en segunda posición quedaba invisible.
+
+**"SD llena" NO es una falla, y por eso no se alarma por espacio libre.** Lo decide
+`LoopEnable` del track:
+
+| `LoopEnable` | Qué hace al llenarse | ¿Alarma? |
+|---|---|---|
+| `true` | borra lo más viejo y sigue grabando | **no** — el espacio libre tendiendo a cero es lo normal |
+| `false` | **deja de grabar**, y ningún evento tiene video | **sí** |
+
+Alarmar por `freeSpace` bajo daría un falso positivo en toda la flota a los pocos días. Mirando
+la configuración en cambio, la falla se ve el día uno y no cuando ya se perdió la grabación.
+Medido en el DS-2XM6825G0: `LoopEnable true`, 1536 MB libres de 7695, `workMode quota`.
+
+Con `LoopEnable false` el campo `storage` viaja como **`nooverwrite`**. Es un **valor** nuevo en
+un campo que ya era de texto libre (`ok`, `unformatted`, `error`, `idle`), **no una clave nueva**:
+la forma del JSON no cambia. El log sí separa los dos casos, porque piden acciones distintas —
+formatear no arregla una sobrescritura apagada.
+
+El track se descarga **una sola vez por ciclo** y sirve para el horario y para `LoopEnable`: son
+el mismo documento. Si falla, solo detiene el ciclo cuando había horario que alinear; sin
+`-recordStart`/`-recordEnd`, `LoopEnable` queda sin mirar y el resto sigue. Y si la cámara no
+reporta el campo, **no se alarma por omisión**: ausente no es lo mismo que apagado.
 
 ### Perfil de codificación y reinicio (`-smartCodec`)
 

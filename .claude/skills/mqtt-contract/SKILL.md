@@ -144,6 +144,15 @@ cuando detecta que su reloj derivó:
   `smart_codec: true` sí anticipa clips congelados.
 - `storage` y `storage_free_mb` (en MB) aparecen cuando se pudo consultar el medio. `storage`
   distinto de `ok` es la condición que hace imposible extraer **cualquier** clip.
+- **`storage` es texto libre, no un enum cerrado.** Trae lo que diga la cámara (`ok`,
+  `unformatted`, `error`, `idle`) más un valor propio del binario: **`nooverwrite`**, cuando la
+  sobrescritura cíclica está apagada y por lo tanto la cámara va a dejar de grabar al llenarse.
+  Se agregó como valor y no como clave nueva justamente para no cambiar la forma del mensaje.
+- **No hay alarma por espacio libre bajo**, y es deliberado: con la sobrescritura encendida
+  —el default— el espacio libre tendiendo a cero es lo normal en una cámara sana, y alarmar por
+  eso daría un falso positivo en toda la flota. Lo que se vigila es la configuración.
+- **`storage_free_mb` desaparece cuando vale 0**, por el `omitempty`. Su ausencia no significa
+  "no se midió"; para eso está `storage`, que sí viaja siempre que se pudo consultar.
 - **`video_dir_free_mb` no es `storage_free_mb`.** `storage_free_mb` es la SD **de la cámara**, que
   es de donde se lee la grabación; `video_dir_free_mb` es el disco **del gateway** (`/SD`), que es
   donde se escribe el clip. Dos discos distintos, dos fallas distintas: la SD de la cámara llena
