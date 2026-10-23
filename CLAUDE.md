@@ -657,6 +657,13 @@ Ojo con el patrón: `ctx.Parent()` **sí** es correcto en los hijos (`EventActor
 
 ## Documentación de referencia (`docs/`)
 
+**[`docs/contrato/`](docs/contrato/)** documenta las dos fronteras hacia afuera, para quien
+implemente del lado de la plataforma: los eventos de MQTT (cuáles son nuevos y a cuáles se les
+agregaron campos), la ruta y el contenido de lo que queda en el bucket, y **cómo se identifica un
+clip** desde un evento y desde el JSON. Si tocás el contrato, actualizalo junto con la skill
+`mqtt-contract` — la skill es para quien trabaja en este repo, el `docs/contrato/` es para quien
+consume lo que publica.
+
 | PDF | Qué es | Aplica |
 |---|---|---|
 | `ISAPI_peopleCounting.pdf` (89 p.) | guía oficial de conteo de personas: httpHosts, triggers, evento `PeopleCounting`, endpoints | **sí, es el documento clave** |
