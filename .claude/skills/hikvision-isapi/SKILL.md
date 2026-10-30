@@ -122,10 +122,11 @@ El índice completo de endpoints con método y mensaje está en
 En orden, del lado nuestro hacia la cámara:
 
 1. ¿El proceso escucha? `ss -lntp | grep 8088`
-2. ¿`Content-Type` aceptado? Desde **1.0.30** el handler acepta cualquier media type que contenga
-   `xml` y **deja WARN al descartar**, así que un `multipart/form-data` —que la spec §6.2 permite
-   cuando la cámara adjunta imagen— ya no desaparece sin rastro. Sigue sin parsearse; ver
-   "Discrepancias".
+2. ¿`Content-Type` aceptado? El handler atiende **dos** formas: cualquier media type con `xml`
+   (las cámaras en campo) y `multipart/form-data` (la G1 desde V4.2.2, que adjunta la foto del
+   cruce). Cualquier otra cosa se descarta **con WARN**, nunca en silencio. Si ves
+   `discarded POST body from <ip>, unsupported Content-Type ...`, la cámara cambió de formato y
+   esa puerta **no está contando**.
 3. ¿Llega el POST? Corre con `-logStd -debug -logxml` y revisa `cameralog`: registra el cuerpo
    crudo antes de parsear ([listenner.go:56](../../../peoplecounting/listenner.go#L56)).
 4. ¿El httpHost está bien y alcanzable? `POST .../httpHosts/<ID>/test` → `errorCode 0` / `ok` si
@@ -207,9 +208,18 @@ El estado indica si se manifiesta hoy en el equipo verificado:
    `application/xml`), **corregido en 1.0.30**: el filtro acepta cualquier media type con `xml` y
    el descarte deja WARN. Antes era **silencioso con HTTP 200**, el fallo más difícil de
    diagnosticar que tenía el binario.
-2. **`multipart/form-data` no se parsea** — *latente y posible en este modelo*
-   (`isSupportPicture=true`). Habilitar el envío de imagen rompería el conteo; desde 1.0.30 al
-   menos queda un WARN nombrando el `Content-Type`.
+2. **`multipart/form-data` no se parsaba** — *dejó de ser latente el 2026-10-30*, **corregido**.
+   La G1 con firmware **V4.2.2** adjunta la foto del cruce y manda
+   `multipart/form-data; charset="UTF-8"; boundary=...`. Ese media type no contiene `xml`, así que
+   el cuerpo entero —XML e imagen— se descartaba y la cámara recibía 200: esa puerta dejó de
+   contar sin que nada fallara a la vista. Ahora `xmlDeMultipart` saca la parte XML y la entrega al
+   mismo parser; la imagen **se descarta sin leerla**, porque nada la consume y son cientos de kB
+   por evento en un equipo embebido. El camino del XML pelado no cambió, y
+   `TestListenAceptaLasDosFormas` mete las dos formas por el servidor real para que no se separen.
+
+   **Lo que no se pudo hacer: apagar el envío de imagen desde la cámara.** `uploadImagesDataType`
+   aparece en `/httpHosts/capabilities` pero **no** en la configuración del host, y la de conteo no
+   tiene ningún campo de imagen. En este firmware el adjunto viene atado al evento.
 3. **`signalTrigger` se contaría como realtime** — *latente, a un cambio de configuración*
    (`countingType` admite `none,alarmInputTrigger` y está en `none`), **corregido en 1.0.30**.
    La consecuencia era peor de lo que parece: como esos eventos traen conteo **de ventana** y no

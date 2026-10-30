@@ -118,6 +118,7 @@ El binario soporta **las dos** generaciones, y la diferencia no es cosmética:
 | Cuándo llega | en cada cruce (`statisticalMethods: realTime`) | al cerrar cada `dataUploadCycle` (15 min por defecto) |
 | Marca de tiempo | `<RealTime><time>` | `<TimeRange>` inicio y fin |
 | Sabotaje | `scenechangedetection` | `shelteralarm` |
+| Cuerpo del POST | `application/xml` | `application/xml`, y **`multipart/form-data` desde V4.2.2** |
 | ¿Sirve para video? | **sí** | **no** — ver abajo |
 
 **El `eventType` de la G1 no está documentado por Hikvision**: `counting` no aparece ni en
@@ -148,6 +149,26 @@ sin rama `default` devolvía `(nil, nil)`, el handler mandaba un `Event{Data: ni
 type switch de `ListenActor` tampoco tenía `default`, y la cámara recibía **HTTP 200**: tres capas
 de silencio. Así se perdió el conteo de la G1 hasta que hubo que capturar los POST en crudo. Es el
 mismo defecto que se corrigió en 1.0.30 para el `Content-Type`.
+
+### El evento puede venir en multipart
+
+**Desde el firmware V4.2.2 la G1 adjunta la foto del cruce**, y con eso cambia el `Content-Type`
+del POST:
+
+| firmware | `Content-Type` | |
+|---|---|---|
+| G0 (cualquiera) y G1 hasta V3.2.2 | `application/xml; charset=UTF-8` | el camino de siempre |
+| G1 desde **V4.2.2** | `multipart/form-data; charset="UTF-8"; boundary=…` | una parte XML + la imagen |
+
+`xmlDeMultipart` saca la parte XML y se la da al mismo parser; **el camino del XML pelado no
+cambia**, que es el de todas las cámaras en campo. Hay una prueba de extremo a extremo
+(`TestListenAceptaLasDosFormas`) que mete las dos formas por el servidor real y falla si alguien
+rompe una.
+
+**La parte XML se elige por su `Content-Type` y, si no lo trae, porque el contenido empieza por
+`<`** — no por un nombre de parte fijo, que el próximo firmware cambiaría. **La imagen se descarta
+sin leerla**: hoy nada la consume y serían cientos de kB por evento cargados en memoria para
+tirarlos. Cuando haga falta, `xmlDeMultipart` es el único lugar que hay que tocar.
 
 **El parser ya no exige la declaración `<?xml ?>`.** Antes consumía el primer token a ciegas
 asumiendo que estaba; un cuerpo sin ella perdía su elemento raíz y fallaba con un mensaje que
@@ -660,8 +681,11 @@ Corregidas en **1.0.30**:
 
 Pendientes:
 
-- **latente** — un POST `multipart/form-data` no se parsea, y este modelo soporta envío de imagen
-  (`isSupportPicture=true`). Hoy al menos deja WARN;
+- **corregido** — un POST `multipart/form-data` **ya se parsea**. Dejó de ser latente el
+  2026-10-30, cuando la G1 pasó a firmware V4.2.2: desde esa versión adjunta la foto del cruce y
+  manda `multipart/form-data; charset="UTF-8"; boundary=...`, que no contiene `xml` y caía en el
+  descarte. Esa puerta dejó de contar **sin que nada fallara a la vista** — la cámara recibía 200
+  y solo quedaba el WARN. Ver "El evento puede venir en multipart" abajo;
 - **no ocurre** — el tamper se cuenta por notificación sin filtrar `eventState`, pero el trigger
   está en `notificationRecurrence: beginning`. Sin verificar si `notificationMethod: center`
   llega siquiera al httpHost.
