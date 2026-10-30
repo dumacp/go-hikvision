@@ -139,8 +139,7 @@ func (act *ListenActor) runListen(ctx context.Context) {
 			// value, which then discards the next real event as a jump over 10.
 			// statisticalMethods is optional in ISAPI, so an empty value is taken as
 			// realTime rather than dropping every event from such a camera.
-			if m := event.PeopleCounting.StatisticalMethods; strings.Contains(m, "timeRange") ||
-				strings.Contains(m, "signalTrigger") {
+			if m := event.PeopleCounting.StatisticalMethods; esConteoDeVentana(m) {
 				act.warnLog.Printf("event %s (window count, not accumulated), events -> %+v",
 					m, event.PeopleCounting)
 				break
@@ -235,4 +234,27 @@ func (act *ListenActor) runListen(ctx context.Context) {
 		}
 	}
 	act.context.Send(act.context.Self(), &msgListenError{})
+}
+
+// esConteoDeVentana dice si un `statisticalMethods` trae el conteo de un INTERVALO en
+// vez del acumulado de la cámara.
+//
+// Se compara **sin distinguir mayúsculas** porque las dos generaciones escriben el
+// mismo valor distinto, y el filtro anterior (`strings.Contains(m, "timeRange")`) solo
+// atrapaba una. Medido en el mismo gateway, el mismo día:
+//
+//	192.168.186.91 (G0)          "timeRange"   ← se descartaba
+//	192.168.186.93 (G1, V4.2.2)  "TimeRange"   ← se COLABA
+//
+// Y colarse no es un detalle: esos eventos traen el conteo de la ventana (enter=1)
+// mientras el acumulado real va en 21. CountingActor calcula 1−21 = −20, entra por la
+// rama de diff negativo, suma 1 porque el valor es menor que 4 y deja rawXmap en 1 —
+// con lo que el SIGUIENTE evento real da un salto de 20 y también se descarta. Es la
+// cascada que corrompe el acumulado, no una duplicación.
+//
+// La lista sigue siendo negra y no blanca: `statisticalMethods` es opcional en ISAPI y
+// exigir "realTime" descartaría todo evento de una cámara que omita el nodo.
+func esConteoDeVentana(m string) bool {
+	m = strings.ToLower(m)
+	return strings.Contains(m, "timerange") || strings.Contains(m, "signaltrigger")
 }

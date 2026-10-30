@@ -150,6 +150,38 @@ type switch de `ListenActor` tampoco tenía `default`, y la cámara recibía **H
 de silencio. Así se perdió el conteo de la G1 hasta que hubo que capturar los POST en crudo. Es el
 mismo defecto que se corrigió en 1.0.30 para el `Content-Type`.
 
+### La G1 cambió de dialecto con el firmware V4.2.2
+
+El firmware nuevo **deshace** buena parte de lo descrito arriba, así que la tabla vale para
+V3.2.2 y lo que sigue para V4.2.2:
+
+| | G1 con V3.2.2 | G1 con **V4.2.2** |
+|---|---|---|
+| `eventType` | `counting` | `PeopleCounting`, como la G0 |
+| `statisticalMethods` | ausente | **`TimeRange`** y **`realTime`** |
+| ¿acumulados? | no, solo ventana | **sí**, los `realTime` traen el acumulado del día |
+| ¿sirve para video? | no | **sí** — hay instante de cruce |
+
+**La V4.2.2 sí reporta por cruce.** Medido en el gateway: de `192.168.186.93` llegaron 4 eventos
+`realTime` con acumulados crecientes (21, 20, 21) junto a 21 de ventana. Es lo que la hoja de
+datos prometía ("real-time and scheduled uploading") y la V3.2.2 aceptaba sin honrar. Con eso **no
+hace falta el recorte por ventana**: la G1 vuelve al camino normal de 16 s centrados, sin costo
+extra en disco ni en datos celulares.
+
+**`statisticalMethods` se compara sin distinguir mayúsculas**, y no es cosmético: las dos cámaras
+escriben el mismo valor distinto. Medido el mismo día en el mismo equipo:
+
+```
+192.168.186.91 (G0)          "timeRange"   16 eventos   ← el filtro viejo lo atrapaba
+192.168.186.93 (G1, V4.2.2)  "TimeRange"   21 eventos   ← SE COLABA
+```
+
+Colarse corrompe el acumulado en cascada: el evento de ventana trae `enter=1` mientras el real va
+en 21, `CountingActor` calcula −20, entra por la rama negativa, suma 1 porque es menor que 4 y
+deja `rawXmap` en 1 — con lo que el siguiente evento real da un salto de 20 y **también** se
+descarta. `esConteoDeVentana` en [client/listen-actor.go](client/listen-actor.go) lo resuelve y
+tiene prueba con las dos grafías.
+
 ### El evento puede venir en multipart
 
 **Desde el firmware V4.2.2 la G1 adjunta la foto del cruce**, y con eso cambia el `Content-Type`
