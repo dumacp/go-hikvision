@@ -138,7 +138,8 @@ real en ese punto (ver deuda conocida en CLAUDE.md).
 
 ## Prueba unitaria del parser
 
-[peoplecounting/listenner_test.go](../../../peoplecounting/listenner_test.go) tiene un caso con
-XML real pero `want: nil` sin completar, así que `go test ./...` **falla hoy**. Si vas a tocar
-`xml.go`, completar ese `want` con el struct esperado es la forma más rápida y barata de blindar
-el cambio; los XML de `references/` sirven como casos adicionales.
+[peoplecounting/listenner_test.go](../../../peoplecounting/listenner_test.go) cubre el
+reconocimiento del tipo de evento y la forma del cuerpo; `g1_test.go` cubre los valores de conteo
+de cada generación. `go test ./...` **pasa entero**, así que si vas a tocar `xml.go`, agregar el
+caso ahí es más rápido y barato que inyectar por HTTP, y un `FAIL` ya es señal fiable. Los XML de
+`references/` sirven como casos adicionales.

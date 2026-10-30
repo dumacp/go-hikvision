@@ -13,12 +13,11 @@ go build -o /tmp/hikvision ./client/main
 /tmp/hikvision -version     # imprime y sale con código 2 (no es error)
 ```
 
-`go test ./...` **falla hoy** por un caso de prueba incompleto en `peoplecounting`
-(ver deuda conocida en CLAUDE.md). No lo tomes como regresión de tu cambio. Los tres paquetes
-con pruebas reales sí pasan, así que corré esos en vez del global:
+`go test ./...` **pasa completo** desde que se completó el caso incompleto de `peoplecounting`.
+Corré el global y tratá cualquier `FAIL` como regresión tuya:
 
 ```bash
-go test ./client/... ./isapi/
+go test ./...
 ```
 
 ## Dependencias por `replace` — la causa #1 de builds roto
@@ -75,7 +74,7 @@ Ver `actor-conventions` para los cuatro puntos que hay que tocar al agregar esta
 
 ## Checklist de release
 
-1. `go build ./... && go vet ./...` limpios, y `go test ./client/... ./isapi/`.
+1. `go build ./... && go vet ./...` limpios, y `go test ./...` **entero** en verde.
 2. **NO subas `showVersion`.** Se sube aparte, cuando hay acuerdo de que lo que está en `master`
    es lo que se despliega, y el número lo decide quien despliega. Un commit que la sube por cada
    cambio produce versiones que nunca existieron como binario: en esta historia `1.0.35` es una
