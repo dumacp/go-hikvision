@@ -75,10 +75,6 @@ type VideoActor struct {
 	tickPend bool
 	// clockWarned evita repetir el aviso de relojes desfasados en cada evento.
 	clockWarned bool
-	// ventanaAvisada evita repetir por cada paso que esa puerta cuenta por ventana y
-	// por lo tanto no puede tener video. Es una propiedad del modelo de cámara, no un
-	// incidente: una vez por puerta alcanza.
-	ventanaAvisada map[int32]bool
 	// sinEspacioAvisado evita repetir el aviso del disco lleno en cada evento. Con el
 	// disco al tope fallan TODOS los pasos, así que un mensaje por evento serían cientos
 	// por día diciendo lo mismo, y el aviso se perdería entre sus propias repeticiones.
@@ -173,7 +169,6 @@ func NewVideoActor(cameras []string, user, pass, dir string, preRoll, duration t
 	}
 	a.camInfo = make(map[int32]camIdent)
 	a.lastEvent = make(map[int32]time.Time)
-	a.ventanaAvisada = make(map[int32]bool)
 	// Un error acá no es motivo para deshabilitar nada: el campo queda vacío.
 	a.hostname, _ = os.Hostname()
 	a.Logger = &Logger{}
@@ -321,23 +316,6 @@ func (a *VideoActor) enqueue(ctx actor.Context, msg *messages.Event) {
 		// Un evento sin marca de tiempo no se puede ubicar en la grabación. Pasa con
 		// los eventos replicados de una boltdb anterior a este campo.
 		a.buildLog.Printf("evento sin timestamp, no se extrae video: %v", msg)
-		return
-	}
-	if msg.GetDelta() {
-		// Conteo por VENTANA (DS-2XM6825G1): el evento dice cuántos cruzaron en un
-		// intervalo de minutos, no cuándo cruzó cada uno. Su timestamp es el fin de la
-		// ventana, así que un recorte centrado ahí mostraría el pasillo vacío con el
-		// nombre de un paso que ocurrió minutos antes.
-		//
-		// Es la misma trampa que obliga a usar isapi.HasCoverage: un clip con el nombre
-		// de un evento y la imagen de otro momento es peor que no tener clip, porque
-		// nadie lo detecta. El conteo se publica igual; lo que no hay es video.
-		if !a.ventanaAvisada[msg.GetID()] {
-			a.ventanaAvisada[msg.GetID()] = true
-			a.warnLog.Printf("la cámara de la puerta %d cuenta por ventana de tiempo: sus "+
-				"pasos NO van a tener video, porque no se sabe en qué instante ocurrieron",
-				msg.GetID())
-		}
 		return
 	}
 	if a.cameraFor(msg.GetID()) == "" {

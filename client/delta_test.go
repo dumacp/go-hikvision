@@ -6,8 +6,17 @@ import (
 	"github.com/dumacp/go-hikvision/client/messages"
 )
 
-// simulaConteo reproduce la aritmética de CountingActor sobre una secuencia de eventos,
-// sin levantar el actor: lo que se fija acá es la regla, no el cableado.
+// Estas pruebas cubren la aritmética de CountingActor, incluida la rama de Delta.
+//
+// OJO: Delta ya NO lo produce nadie. El camino que lo generaba —la DS-2XM6825G1 con
+// firmware V3.2.2, que reportaba por ventana de tiempo— se quitó, porque ese formato no
+// dice en qué instante cruzó cada persona y nunca podía tener video. La aritmética se
+// conserva solo para la RÉPLICA de las boltdb ya desplegadas, que tienen eventos
+// marcados así y los reproducen al reiniciar. Si aparece un Delta nuevo, algo está
+// mandando conteo de ventana y hay que mirar el firmware de esa cámara.
+//
+// simulaConteo reproduce esa aritmética sobre una secuencia de eventos, sin levantar el
+// actor: lo que se fija acá es la regla, no el cableado.
 //
 // Devuelve el acumulado publicado y el "raw" que queda persistido.
 func simulaConteo(eventos []*messages.Event) (publicado, raw int64) {
@@ -30,9 +39,9 @@ func ev(v int64, delta bool) *messages.Event {
 	return &messages.Event{ID: 0, Type: messages.Event_INPUT, Value: v, Delta: delta}
 }
 
-// TestG0SigueContandoPorDiferencia: la cámara vieja manda acumulados y el paso sale de
-// restar. Es el comportamiento que NO se puede cambiar.
-func TestG0SigueContandoPorDiferencia(t *testing.T) {
+// TestConteoPorDiferencia: las cámaras mandan acumulados y el paso sale de restar. Es
+// el ÚNICO camino vivo hoy, y el que no se puede cambiar.
+func TestConteoPorDiferencia(t *testing.T) {
 	pub, raw := simulaConteo([]*messages.Event{
 		ev(1, false), ev(2, false), ev(2, false), ev(5, false),
 	})
@@ -46,7 +55,7 @@ func TestG0SigueContandoPorDiferencia(t *testing.T) {
 
 // TestG1CuentaElIncremento: la cámara nueva manda el conteo de una ventana, que YA es
 // el paso. Restar contra el acumulado anterior daría números absurdos.
-func TestG1CuentaElIncremento(t *testing.T) {
+func TestReplicaConDeltaCuentaElIncremento(t *testing.T) {
 	pub, raw := simulaConteo([]*messages.Event{
 		ev(2, true), ev(3, true), ev(1, true),
 	})
@@ -65,7 +74,7 @@ func TestG1CuentaElIncremento(t *testing.T) {
 // cero. Con un acumulado sintético la primera ventana daría diff negativo y se
 // descartaría salvo que trajera menos de 4 personas — con el ciclo en 15 minutos, eso es
 // perder una ventana entera en cada reinicio. Con el incremento marcado, no pasa.
-func TestG1NoSePierdeTrasReinicio(t *testing.T) {
+func TestReplicaConDeltaNoSePierdeTrasReinicio(t *testing.T) {
 	// El equipo venía contando y el raw quedó en 50.
 	raw := int64(50)
 	var publicado int64
@@ -93,7 +102,7 @@ func TestG1NoSePierdeTrasReinicio(t *testing.T) {
 
 // TestG1RespetaElTopeDeDiez: el incremento pasa por las mismas guardas. Una ventana con
 // 10 o más personas se descarta igual que un salto de la cámara vieja.
-func TestG1RespetaElTopeDeDiez(t *testing.T) {
+func TestReplicaConDeltaRespetaElTopeDeDiez(t *testing.T) {
 	pub, raw := simulaConteo([]*messages.Event{ev(12, true), ev(3, true)})
 	if pub != 3 {
 		t.Errorf("publicado %d, quiero 3: la ventana de 12 se descarta", pub)

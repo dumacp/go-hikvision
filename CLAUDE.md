@@ -101,86 +101,65 @@ cámara --HTTP POST XML--> peoplecounting.Listen (:8088)
 - sin `-camera`, la regla histórica: `RemoteAddr` con `192.168.188.21` → `id 1`, vacío → `id 1`,
   cualquier otra → `id 0`.
 
-Sigue hardcodeada `pingIP` en [client/ping-actor.go:13](client/ping-actor.go#L13); la absorberá el
-actor de cámara cuando exista. Ojo con el ruteo: si los eventos llegan por NAT o port-forward, el
+**El keep-alive consulta la primera cámara de `-camera`.** Sin `-camera` queda la dirección
+histórica (`192.168.188.21`), para no alterar los equipos ya desplegados. Antes era *siempre* esa,
+y en un gateway con otro direccionamiento el `GET` fallaba cada ciclo: medido en FLO-W7-0138, con
+las cámaras en `.91` y `.93`, **dos `CounterDisconnected` falsos en cinco minutos** mientras las
+dos cámaras contaban sin problema. Una alarma que miente es peor que no tenerla, porque entrena a
+ignorar la que sí importa. Ojo con el ruteo: si los eventos llegan por NAT o port-forward, el
 `RemoteAddr` es el del router y **todas las puertas colapsan en una** (verificado: con ruteo puro
 la IP de origen se preserva).
 
-### Dos modelos de cámara, dos formatos de evento
+### Dos generaciones de cámara, UN solo formato de evento
 
-El binario soporta **las dos** generaciones, y la diferencia no es cosmética:
+El binario atiende **DS-2XM6825G0** y **DS-2XM6825G1**, y desde que la G1 está en firmware
+**V4.2.2** las dos mandan lo mismo: `eventType: PeopleCounting` con `statisticalMethods`, donde
+`realTime` trae los **acumulados** del día. Un solo canal, un solo parser, una sola regla de
+conteo, un solo `COUNTERSDOOR`.
 
-| | DS-2XM6825G0 (V5.5.850) | DS-2XM6825G1 (V3.2.2) |
-|---|---|---|
-| Esquema | ISAPI 1.0, `urn:psialliance-org` | ISAPI 2.0, `isapi.org/ver20` |
-| `eventType` | `PeopleCounting` | **`counting`** |
-| `enter`/`exit` | **acumulados** del día | **incremento de una ventana** |
-| Cuándo llega | en cada cruce (`statisticalMethods: realTime`) | al cerrar cada `dataUploadCycle` (15 min por defecto) |
-| Marca de tiempo | `<RealTime><time>` | `<TimeRange>` inicio y fin |
-| Sabotaje | `scenechangedetection` | `shelteralarm` |
-| Cuerpo del POST | `application/xml` | `application/xml`, y **`multipart/form-data` desde V4.2.2** |
-| ¿Sirve para video? | **sí** | **no** — ver abajo |
+Lo que todavía difiere es de transporte, y está absorbido:
 
-**El `eventType` de la G1 no está documentado por Hikvision**: `counting` no aparece ni en
-`ISAPI_peopleCounting.pdf` ni en `ISAPI_general.pdf`. Y la guía describe `<SECUploadEnabled>` como
-"uploading mechanism for each second" — el ajuste que debería dar tiempo real — pero la G1 lo
-acepta en `true` **sin honrarlo**. Verificado en banco: con todo configurado igual que la G0, la G1
-nunca manda `realTime`.
+| | G0 | G1 con V4.2.2 | cómo se resuelve |
+|---|---|---|---|
+| `Content-Type` | `application/xml` | **`multipart/form-data`** | `xmlDeMultipart` saca la parte XML |
+| `statisticalMethods` | `timeRange` | **`TimeRange`** | `esConteoDeVentana` compara sin distinguir mayúsculas |
+| namespace | `urn:psialliance-org` | `isapi.org/ver20` | el parser los ignora |
+| sabotaje | `scenechangedetection` | `shelteralarm` | ramas separadas, mismo `TAMPERING` |
+| `starttime` del RTSP | UTC | **reloj de pared** | `Request.HoraLocal`, detectado solo |
 
-**El incremento viaja marcado, no convertido a un acumulado sintético.** `messages.Event` tiene el
-campo `delta`: `ListenActor` lo pone para la G1 y `CountingActor` usa el valor tal cual en vez de
-restar contra `rawXmap`, que se lleva **sumando**. La alternativa —que `ListenActor` mantuviera su
-propio acumulado— falla en cada reinicio: ese acumulado arranca en cero mientras `rawXmap` sigue
-persistido y alto, la primera ventana da `diff` negativo y **se descarta salvo que traiga menos de
-4 personas**. Con el ciclo en 15 minutos eso es perder una ventana entera por reinicio, y este repo
-tiene historia de bucles de supervisión.
+**La grafía de `statisticalMethods` no es cosmética.** Medido el mismo día en el mismo gateway:
+`192.168.186.91` escribió `timeRange` 16 veces y `192.168.186.93` escribió `TimeRange` 21 veces.
+El filtro comparaba distinguiendo mayúsculas y solo atrapaba la primera. Colarse **corrompe el
+acumulado en cascada**: el evento de ventana trae `enter=1` mientras el real va en 21,
+`CountingActor` calcula −20, entra por la rama negativa, suma 1 porque es menor que 4 y deja
+`rawXmap` en 1 — con lo que el siguiente evento real da un salto de 20 y también se descarta.
 
-Un evento replicado de una boltdb vieja no trae el campo, así que vale `false` y el camino de la G0
-queda idéntico.
-
-**Los pasos de la G1 NO tienen video, y es correcto que no lo tengan.** `VideoActor` descarta los
-eventos con `delta`: su marca de tiempo es el **fin de la ventana**, así que un recorte centrado
-ahí mostraría el pasillo vacío con el nombre de un paso ocurrido minutos antes. Es la misma trampa
-que obliga a usar `isapi.HasCoverage` — un clip con el nombre de un evento y la imagen de otro
-momento es peor que no tener clip, porque nadie lo detecta. Se avisa una vez por puerta.
-
-**Un `eventType` desconocido ahora da error con su nombre y la IP de origen.** Antes el `switch`
-sin rama `default` devolvía `(nil, nil)`, el handler mandaba un `Event{Data: nil}` al canal, el
-type switch de `ListenActor` tampoco tenía `default`, y la cámara recibía **HTTP 200**: tres capas
-de silencio. Así se perdió el conteo de la G1 hasta que hubo que capturar los POST en crudo. Es el
-mismo defecto que se corrigió en 1.0.30 para el `Content-Type`.
-
-### La G1 cambió de dialecto con el firmware V4.2.2
-
-El firmware nuevo **deshace** buena parte de lo descrito arriba, así que la tabla vale para
-V3.2.2 y lo que sigue para V4.2.2:
-
-| | G1 con V3.2.2 | G1 con **V4.2.2** |
-|---|---|---|
-| `eventType` | `counting` | `PeopleCounting`, como la G0 |
-| `statisticalMethods` | ausente | **`TimeRange`** y **`realTime`** |
-| ¿acumulados? | no, solo ventana | **sí**, los `realTime` traen el acumulado del día |
-| ¿sirve para video? | no | **sí** — hay instante de cruce |
-
-**La V4.2.2 sí reporta por cruce.** Medido en el gateway: de `192.168.186.93` llegaron 4 eventos
-`realTime` con acumulados crecientes (21, 20, 21) junto a 21 de ventana. Es lo que la hoja de
-datos prometía ("real-time and scheduled uploading") y la V3.2.2 aceptaba sin honrar. Con eso **no
-hace falta el recorte por ventana**: la G1 vuelve al camino normal de 16 s centrados, sin costo
-extra en disco ni en datos celulares.
-
-**`statisticalMethods` se compara sin distinguir mayúsculas**, y no es cosmético: las dos cámaras
-escriben el mismo valor distinto. Medido el mismo día en el mismo equipo:
+**El formato de la G1 con V3.2.2 se soportó y se QUITÓ.** Esa versión mandaba
+`eventType: counting` con el conteo de una ventana de tiempo en vez del acumulado. Nunca podía
+tener video —no dice en qué instante cruzó cada persona— y mantener vivo un camino que no se
+puede probar solo confundía el diagnóstico. Hoy el parser lo **rechaza con un error que nombra el
+firmware y dice qué hacer**:
 
 ```
-192.168.186.91 (G0)          "timeRange"   16 eventos   ← el filtro viejo lo atrapaba
-192.168.186.93 (G1, V4.2.2)  "TimeRange"   21 eventos   ← SE COLABA
+eventType "counting": la camara esta en firmware V3.2.2 y reporta por ventana, no por
+cruce. Actualizala a V4.2.2 o posterior
 ```
 
-Colarse corrompe el acumulado en cascada: el evento de ventana trae `enter=1` mientras el real va
-en 21, `CountingActor` calcula −20, entra por la rama negativa, suma 1 porque es menor que 4 y
-deja `rawXmap` en 1 — con lo que el siguiente evento real da un salto de 20 y **también** se
-descarta. `esConteoDeVentana` en [client/listen-actor.go](client/listen-actor.go) lo resuelve y
-tiene prueba con las dos grafías.
+**Queda una excepción deliberada: la aritmética de `Delta` en `CountingActor`.** Ese campo del
+`.proto` (número 6, **nunca reutilizar**) lo ponía el camino de ventana, y las boltdb ya
+desplegadas tienen eventos marcados así que **se replican al reiniciar**. Sin esa rama se leerían
+como acumulados y el estado recuperado quedaría mal. Nadie debe volver a producir eventos con
+`Delta`: si aparece uno nuevo, algo está mandando conteo de ventana y hay que mirar el firmware de
+esa cámara.
+
+**Un `eventType` desconocido da error con su nombre y la IP de origen.** Antes el `switch` sin
+rama `default` devolvía `(nil, nil)`, el handler mandaba un `Event{Data: nil}` al canal, el type
+switch de `ListenActor` tampoco tenía `default`, y la cámara recibía **HTTP 200**: tres capas de
+silencio. Así se perdió el conteo de la G1 hasta que hubo que capturar los POST en crudo.
+
+**El parser ya no exige la declaración `<?xml ?>`.** Antes consumía el primer token a ciegas
+asumiendo que estaba; un cuerpo sin ella perdía su elemento raíz y fallaba con un mensaje que
+nombraba el segundo elemento, mandando a buscar el problema al lugar equivocado.
 
 ### El evento puede venir en multipart
 

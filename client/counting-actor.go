@@ -45,6 +45,9 @@ type CountingActor struct {
 	// withoutEventID se pasa a EventActor al crearlo. Compuerta temporal de
 	// compatibilidad con la plataforma; ver EventActor.withoutEventID.
 	withoutEventID bool
+	// pingAddr se pasa a PingActor al crearlo. Vacío conserva la dirección
+	// histórica del keep-alive; ver PingActor.addr.
+	pingAddr string
 }
 
 // SetCameraProps habilita el mantenimiento de hora y NTP de las cámaras.
@@ -86,6 +89,13 @@ const (
 )
 
 // NewCountingActor create CountingActor
+// SetPingAddr fija la cámara a la que el keep-alive le hace el GET.
+//
+// Vacío conserva la dirección histórica; ver el comentario de PingActor.addr.
+func (a *CountingActor) SetPingAddr(addr string) {
+	a.pingAddr = addr
+}
+
 func NewCountingActor() *CountingActor {
 	count := &CountingActor{
 		inputsmap:     make(map[int32]int64),
@@ -163,7 +173,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 		a.doors = pid3
 
-		props4 := actor.PropsFromProducer(func() actor.Actor { return &PingActor{} })
+		props4 := actor.PropsFromProducer(func() actor.Actor { return &PingActor{addr: a.pingAddr} })
 		pid4, err := ctx.SpawnNamed(props4, "ping")
 		if err != nil {
 			time.Sleep(3 * time.Second)
@@ -314,9 +324,14 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 		switch msg.GetType() {
 		case messages.Event_INPUT:
-			// Con Delta la camara ya entrego el incremento y no hay nada que restar; el
-			// acumulado se lleva sumando. Es el caso de la DS-2XM6825G1, que reporta el
-			// conteo de una ventana de tiempo y no expone un acumulado del dia.
+			// Delta solo puede venir de la REPLICA de la boltdb: el camino que lo
+			// producia —la DS-2XM6825G1 con firmware V3.2.2, que reportaba por ventana—
+			// se quito. Esta aritmetica se conserva a proposito porque las bases ya
+			// desplegadas tienen eventos marcados asi, y al reiniciar se replican: sin
+			// esto se leerian como acumulados y el estado recuperado quedaria mal.
+			//
+			// No volver a producir eventos con Delta. Si aparece uno nuevo, algo esta
+			// mandando conteo de ventana y hay que mirar el firmware de esa camara.
 			diff := msg.GetValue() - a.rawInputsmap[id]
 			nuevoRaw := msg.GetValue()
 			if msg.GetDelta() {

@@ -111,14 +111,16 @@ func parseXMLEvent(reader io.Reader) (interface{}, error) {
 			people,
 			child,
 		}
-	case CountingType:
-		// El conteo de la G1. Enter/Exit son el incremento de la ventana, no el
-		// acumulado; quien consuma esto NO debe restar contra un valor anterior.
-		ventana := new(EventWindowCounting)
-		if err := funcGetData(decoder, "peopleCounting", ventana); err != nil {
-			return nil, err
-		}
-		result = &EventNotificationAlertCounting{eventNotificationAlert, ventana}
+	case eventoVentanaG1:
+		// La DS-2XM6825G1 con firmware V3.2.2 manda este eventType con el conteo de
+		// una ventana de tiempo en vez del acumulado. Se SOPORTO y se quito: ese
+		// formato no dice en que instante cruzo cada persona, asi que nunca puede
+		// tener video, y mantener vivo un camino que no se puede probar solo sirve
+		// para confundir el diagnostico. La salida es actualizar la camara: desde
+		// V4.2.2 manda PeopleCounting con acumulados, igual que la G0.
+		return nil, fmt.Errorf("eventType %q: la camara esta en firmware V3.2.2 y "+
+			"reporta por ventana, no por cruce. Actualizala a V4.2.2 o posterior",
+			eventType)
 	case ScenechangedetectionType:
 		result = eventNotificationAlert
 	case ShelteralarmType:

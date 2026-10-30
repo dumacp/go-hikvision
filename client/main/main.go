@@ -249,6 +249,15 @@ func main() {
 	}
 
 	counting := client.NewCountingActor()
+	// El keep-alive consulta la primera cámara configurada. Sin -camera queda la
+	// dirección histórica, para no alterar los equipos ya desplegados: ahí el
+	// comportamiento es exactamente el de siempre.
+	for _, ip := range camerasByDoor {
+		if ip != "" {
+			counting.SetPingAddr(ip)
+			break
+		}
+	}
 	applyDoorBool(isZeroOpenState, counting.SetZeroOpenState)
 	applyDoorBool(enableCountWithCloseDoor, counting.SetCountCloseDoor)
 	counting.SetWithoutEventID(withoutEventID)

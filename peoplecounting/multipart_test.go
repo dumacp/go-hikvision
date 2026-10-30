@@ -36,12 +36,12 @@ func cuerpoMultipart(xml string, conImagen bool) (cuerpo []byte, ctype string) {
 
 // TestXMLDeMultipart: la parte XML se encuentra y la imagen no estorba.
 func TestXMLDeMultipart(t *testing.T) {
-	cuerpo, ctype := cuerpoMultipart(xmlG1, true)
+	cuerpo, ctype := cuerpoMultipart(xmlG1V422, true)
 	datos, err := xmlDeMultipart(bytes.NewReader(cuerpo), ctype)
 	if err != nil {
 		t.Fatalf("no deberia fallar: %s", err)
 	}
-	if !bytes.Contains(datos, []byte("<eventType>counting</eventType>")) {
+	if !bytes.Contains(datos, []byte("<eventType>PeopleCounting</eventType>")) {
 		t.Errorf("la parte devuelta no es el XML del evento: %.80s", datos)
 	}
 	// Y lo devuelto tiene que poder parsearse tal cual, sin limpieza extra.
@@ -49,12 +49,12 @@ func TestXMLDeMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("el XML extraido no parsea: %s", err)
 	}
-	c, ok := ev.(*EventNotificationAlertCounting)
+	c, ok := ev.(*EventNotificationAlertPeopleConting)
 	if !ok {
-		t.Fatalf("tipo %T, quiero *EventNotificationAlertCounting", ev)
+		t.Fatalf("tipo %T, quiero *EventNotificationAlertPeopleConting", ev)
 	}
-	if c.Counting.Enter != 2 || c.Counting.Exit != 3 {
-		t.Errorf("enter=%d exit=%d, quiero 2 y 3", c.Counting.Enter, c.Counting.Exit)
+	if c.PeopleCounting.Enter != 21 || c.PeopleCounting.Exit != 20 {
+		t.Errorf("enter=%d exit=%d, quiero 21 y 20", c.PeopleCounting.Enter, c.PeopleCounting.Exit)
 	}
 }
 
@@ -66,13 +66,13 @@ func TestXMLDeMultipartSinRotular(t *testing.T) {
 	var buf bytes.Buffer
 	buf.WriteString("--" + b + "\r\n")
 	buf.WriteString("Content-Disposition: form-data; name=\"x\"\r\n\r\n")
-	buf.WriteString(xmlG1)
+	buf.WriteString(xmlG1V422)
 	buf.WriteString("\r\n--" + b + "--\r\n")
 	datos, err := xmlDeMultipart(bytes.NewReader(buf.Bytes()), "multipart/form-data; boundary="+b)
 	if err != nil {
 		t.Fatalf("no deberia fallar: %s", err)
 	}
-	if !bytes.Contains(datos, []byte("<eventType>counting</eventType>")) {
+	if !bytes.Contains(datos, []byte("<eventType>PeopleCounting</eventType>")) {
 		t.Errorf("no se eligio la parte correcta")
 	}
 }
@@ -123,9 +123,9 @@ func TestListenAceptaLasDosFormas(t *testing.T) {
 		quiero string // fragmento que debe traer el evento parseado
 	}{
 		{"camara en campo: XML pelado", "application/xml; charset=UTF-8", []byte(xmlG0), "PeopleCounting"},
-		{"G1 con V4.2.2: multipart", "", nil, "counting"},
+		{"G1 con V4.2.2: multipart", "", nil, "PeopleCounting"},
 	}
-	casos[1].cuerpo, casos[1].ctype = cuerpoMultipart(xmlG1, true)
+	casos[1].cuerpo, casos[1].ctype = cuerpoMultipart(xmlG1V422, true)
 
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
@@ -164,10 +164,6 @@ func TestListenAceptaLasDosFormas(t *testing.T) {
 				}
 				switch d := evt.Data.(type) {
 				case *EventNotificationAlertPeopleConting:
-					if d.EventType != c.quiero {
-						t.Errorf("eventType %q, quiero %q", d.EventType, c.quiero)
-					}
-				case *EventNotificationAlertCounting:
 					if d.EventType != c.quiero {
 						t.Errorf("eventType %q, quiero %q", d.EventType, c.quiero)
 					}
