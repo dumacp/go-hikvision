@@ -33,6 +33,10 @@ type ListenActor struct {
 	entersBefore  map[int]int64
 	exitsBefore   map[int]int64
 	timeBefore    map[int]time.Time
+	// ventanaAvisada evita repetir en cada ventana el aviso de que esa camara reporta
+	// por intervalo y no por cruce. Es una propiedad del modelo, no un incidente: dicho
+	// una vez por puerta alcanza.
+	ventanaAvisada map[int]bool
 
 	cancel func()
 
@@ -79,6 +83,7 @@ func NewListen(socket string, countingActor *actor.PID) *ListenActor {
 	act.timeBefore = make(map[int]time.Time)
 	act.exitsBefore = make(map[int]int64)
 	act.entersBefore = make(map[int]int64)
+	act.ventanaAvisada = make(map[int]bool)
 	return act
 }
 
@@ -183,6 +188,43 @@ func (act *ListenActor) runListen(ctx context.Context) {
 					Value: exits, Timestamp: dateTime.Unix()})
 			}
 			act.exitsBefore[id] = exits
+		case *peoplecounting.EventNotificationAlertCounting:
+			// Conteo por ventana de la G1. Enter/Exit YA son el incremento, asi que van
+			// marcados con Delta y CountingActor no resta contra nada.
+			//
+			// La marca de tiempo del evento es el FIN de la ventana. Se usa esa y no el
+			// inicio porque es la unica que acota de verdad cuando ocurrieron los cruces
+			// —estan en algun punto del intervalo— y porque el reloj que importa para el
+			// video es el de la camara en el momento que reporta.
+			dateTime, err := parseDateTime(event.DateTime)
+			if err != nil {
+				act.warnLog.Printf("time event error -> %s", err)
+				break
+			}
+			act.timeBefore[id] = dateTime
+			act.cameralog.Printf("%d: listen event (ventana): %+v\n",
+				time.Now().UnixNano()/1000_000, event.Counting)
+
+			// El conteo por ventana no sirve para recortar video: los cruces ocurrieron
+			// en algun momento de un intervalo de minutos, no en el instante del evento.
+			// Pedir un clip centrado aca mostraria otra cosa. Se avisa una sola vez por
+			// puerta para no repetirlo en cada ventana.
+			if !act.ventanaAvisada[id] {
+				act.ventanaAvisada[id] = true
+				act.warnLog.Printf("camara (id: %d) reporta el conteo por VENTANA [%s, %s], "+
+					"no por cruce: los pasos se cuentan pero no se les puede extraer video, "+
+					"porque no se sabe en que instante del intervalo ocurrieron",
+					id, event.Counting.TimeRange.StartTime, event.Counting.TimeRange.EndTime)
+			}
+
+			if n := event.Counting.Enter; n > 0 {
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id),
+					Type: messages.Event_INPUT, Value: n, Timestamp: dateTime.Unix(), Delta: true})
+			}
+			if n := event.Counting.Exit; n > 0 {
+				act.context.Send(act.countingActor, &messages.Event{ID: int32(id),
+					Type: messages.Event_OUTPUT, Value: n, Timestamp: dateTime.Unix(), Delta: true})
+			}
 		case *peoplecounting.EventNotificationAlert:
 			switch event.EventType {
 			case peoplecounting.ScenechangedetectionType:

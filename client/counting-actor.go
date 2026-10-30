@@ -314,11 +314,19 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 		switch msg.GetType() {
 		case messages.Event_INPUT:
+			// Con Delta la camara ya entrego el incremento y no hay nada que restar; el
+			// acumulado se lleva sumando. Es el caso de la DS-2XM6825G1, que reporta el
+			// conteo de una ventana de tiempo y no expone un acumulado del dia.
 			diff := msg.GetValue() - a.rawInputsmap[id]
+			nuevoRaw := msg.GetValue()
+			if msg.GetDelta() {
+				diff = msg.GetValue()
+				nuevoRaw = a.rawInputsmap[id] + msg.GetValue()
+			}
 			if a.Recovering() {
 				a.inputsmap[id] += diff
 				a.allInputsmap[id] += diff
-				a.rawInputsmap[id] = msg.GetValue()
+				a.rawInputsmap[id] = nuevoRaw
 				break
 			}
 			a.PersistReceive(msg)
@@ -334,14 +342,14 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 					a.warnLog.Printf("counting inputs when door (id: %d) is closed, count: %v", id, diff)
 				} else {
 					a.inputsmap[id] += diff
-					a.rawInputsmap[id] = msg.GetValue()
-					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: diff, Timestamp: msg.GetTimestamp()})
+					a.rawInputsmap[id] = nuevoRaw
+					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: diff, Timestamp: msg.GetTimestamp(), Delta: msg.GetDelta()})
 				}
 				a.allInputsmap[id] += diff
 			} else if diff < 0 {
 				a.warnLog.Printf("warning deviation in data (id: %d) -> rawInputs: %d, GetValue() in event: %d", id, a.rawInputsmap, msg.GetValue())
 				if msg.GetValue() < 4 {
-					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: msg.GetValue(), Timestamp: msg.GetTimestamp()})
+					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_INPUT, Value: msg.GetValue(), Timestamp: msg.GetTimestamp(), Delta: msg.GetDelta()})
 					a.inputsmap[id] += msg.GetValue()
 					a.allInputsmap[id] += msg.GetValue()
 				}
@@ -357,13 +365,19 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 					"o más, acumulado de la cámara %d contra %d guardado",
 					id, diff, msg.GetValue(), a.rawInputsmap[id])
 			}
-			a.rawInputsmap[id] = msg.GetValue()
+			a.rawInputsmap[id] = nuevoRaw
 		case messages.Event_OUTPUT:
+			// Ver el comentario del caso INPUT.
 			diff := msg.GetValue() - a.rawOutputsmap[id]
+			nuevoRaw := msg.GetValue()
+			if msg.GetDelta() {
+				diff = msg.GetValue()
+				nuevoRaw = a.rawOutputsmap[id] + msg.GetValue()
+			}
 			if a.Recovering() {
 				a.outputsmap[id] += diff
 				a.allOutputsmap[id] += diff
-				a.rawOutputsmap[id] = msg.GetValue()
+				a.rawOutputsmap[id] = nuevoRaw
 				break
 			}
 			a.PersistReceive(msg)
@@ -380,14 +394,14 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 					a.warnLog.Printf("counting outputs when door (id: %d) is closed, count: %v", id, diff)
 				} else {
 					a.outputsmap[id] += diff
-					a.rawOutputsmap[id] = msg.GetValue()
-					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: diff, Timestamp: msg.GetTimestamp()})
+					a.rawOutputsmap[id] = nuevoRaw
+					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: diff, Timestamp: msg.GetTimestamp(), Delta: msg.GetDelta()})
 				}
 				a.allOutputsmap[id] += diff
 			} else if diff < 0 {
 				a.warnLog.Printf("warning deviation in data (id: %d)-> rawOutputs: %d, GetValue() in event: %d", id, a.rawOutputsmap, msg.GetValue())
 				if msg.GetValue() < 4 {
-					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: msg.GetValue(), Timestamp: msg.GetTimestamp()})
+					a.sendCounted(ctx, &messages.Event{ID: msg.ID, Type: messages.Event_OUTPUT, Value: msg.GetValue(), Timestamp: msg.GetTimestamp(), Delta: msg.GetDelta()})
 					a.outputsmap[id] += msg.GetValue()
 					a.allOutputsmap[id] += msg.GetValue()
 				}
@@ -400,7 +414,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 					"o más, acumulado de la cámara %d contra %d guardado",
 					id, diff, msg.GetValue(), a.rawOutputsmap[id])
 			}
-			a.rawOutputsmap[id] = msg.GetValue()
+			a.rawOutputsmap[id] = nuevoRaw
 		case messages.Event_TAMPERING:
 			a.tamperingmap[id] += 1
 			a.warnLog.Println("tampering")

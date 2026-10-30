@@ -106,6 +106,53 @@ actor de cámara cuando exista. Ojo con el ruteo: si los eventos llegan por NAT 
 `RemoteAddr` es el del router y **todas las puertas colapsan en una** (verificado: con ruteo puro
 la IP de origen se preserva).
 
+### Dos modelos de cámara, dos formatos de evento
+
+El binario soporta **las dos** generaciones, y la diferencia no es cosmética:
+
+| | DS-2XM6825G0 (V5.5.850) | DS-2XM6825G1 (V3.2.2) |
+|---|---|---|
+| Esquema | ISAPI 1.0, `urn:psialliance-org` | ISAPI 2.0, `isapi.org/ver20` |
+| `eventType` | `PeopleCounting` | **`counting`** |
+| `enter`/`exit` | **acumulados** del día | **incremento de una ventana** |
+| Cuándo llega | en cada cruce (`statisticalMethods: realTime`) | al cerrar cada `dataUploadCycle` (15 min por defecto) |
+| Marca de tiempo | `<RealTime><time>` | `<TimeRange>` inicio y fin |
+| Sabotaje | `scenechangedetection` | `shelteralarm` |
+| ¿Sirve para video? | **sí** | **no** — ver abajo |
+
+**El `eventType` de la G1 no está documentado por Hikvision**: `counting` no aparece ni en
+`ISAPI_peopleCounting.pdf` ni en `ISAPI_general.pdf`. Y la guía describe `<SECUploadEnabled>` como
+"uploading mechanism for each second" — el ajuste que debería dar tiempo real — pero la G1 lo
+acepta en `true` **sin honrarlo**. Verificado en banco: con todo configurado igual que la G0, la G1
+nunca manda `realTime`.
+
+**El incremento viaja marcado, no convertido a un acumulado sintético.** `messages.Event` tiene el
+campo `delta`: `ListenActor` lo pone para la G1 y `CountingActor` usa el valor tal cual en vez de
+restar contra `rawXmap`, que se lleva **sumando**. La alternativa —que `ListenActor` mantuviera su
+propio acumulado— falla en cada reinicio: ese acumulado arranca en cero mientras `rawXmap` sigue
+persistido y alto, la primera ventana da `diff` negativo y **se descarta salvo que traiga menos de
+4 personas**. Con el ciclo en 15 minutos eso es perder una ventana entera por reinicio, y este repo
+tiene historia de bucles de supervisión.
+
+Un evento replicado de una boltdb vieja no trae el campo, así que vale `false` y el camino de la G0
+queda idéntico.
+
+**Los pasos de la G1 NO tienen video, y es correcto que no lo tengan.** `VideoActor` descarta los
+eventos con `delta`: su marca de tiempo es el **fin de la ventana**, así que un recorte centrado
+ahí mostraría el pasillo vacío con el nombre de un paso ocurrido minutos antes. Es la misma trampa
+que obliga a usar `isapi.HasCoverage` — un clip con el nombre de un evento y la imagen de otro
+momento es peor que no tener clip, porque nadie lo detecta. Se avisa una vez por puerta.
+
+**Un `eventType` desconocido ahora da error con su nombre y la IP de origen.** Antes el `switch`
+sin rama `default` devolvía `(nil, nil)`, el handler mandaba un `Event{Data: nil}` al canal, el
+type switch de `ListenActor` tampoco tenía `default`, y la cámara recibía **HTTP 200**: tres capas
+de silencio. Así se perdió el conteo de la G1 hasta que hubo que capturar los POST en crudo. Es el
+mismo defecto que se corrigió en 1.0.30 para el `Content-Type`.
+
+**El parser ya no exige la declaración `<?xml ?>`.** Antes consumía el primer token a ciegas
+asumiendo que estaba; un cuerpo sin ella perdía su elemento raíz y fallaba con un mensaje que
+nombraba el segundo elemento, mandando a buscar el problema al lugar equivocado.
+
 ### Reglas de conteo (CountingActor)
 
 Sobre `messages.Event_INPUT` / `_OUTPUT` en [client/counting-actor.go:245-323](client/counting-actor.go#L245-L323):

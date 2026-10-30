@@ -68,7 +68,10 @@ func Listen(ctx context.Context, socket string, wError, wWarn, wCamera *log.Logg
 				// req.Body.Close()
 				// reader.Close()
 				if err != nil {
-					log.Println(err)
+					// La direccion de origen es la mitad util del aviso: dice QUE camara
+					// manda algo que no sabemos leer, que es lo que se necesita para ir a
+					// mirarla. Sin eso el mensaje obliga a capturar el trafico en crudo.
+					wWarn.Printf("evento de %s descartado: %s", req.RemoteAddr, err)
 					return
 				}
 
