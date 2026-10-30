@@ -73,6 +73,21 @@ host configurado en ella. Cadena completa:
    `POST /ISAPI/Event/notification/httpHosts` (agrega uno), con `XML_HttpHostNotification`:
    `url` absoluta al `-socket` del binario, `protocolType` `HTTP`, `parameterFormatType` `XML`,
    `addressingFormatType` `ipaddress`, `httpAuthenticationMethod` `none`.
+
+   **Lo que el GET devuelve NO se puede reenviar tal cual en el PUT** (medido en la G1, V3.2.2):
+   las ranuras libres se leen con `<portNo>0</portNo>`, pero `capabilities` declara
+   `portNo min="1"`, así que reenviar la lista completa la rechaza entera con `statusCode 3`
+   / `Device Error` — sin decir qué campo ni cuál ranura. **Mandá solo las ranuras con
+   contenido**: dos entradas en vez de tres, y el PUT responde `statusCode 1`.
+
+   Y `httpAuthenticationMethod` se lee como `base64` mientras `capabilities` solo ofrece
+   `none`. En la práctica la cámara acepta de vuelta el `base64` que ella misma reporta, así
+   que conservalo; lo que la rompe es el `portNo 0`.
+
+   **Las ranuras NO son direccionables de a una en este firmware.** `GET` y `PUT` sobre
+   `/httpHosts/1`, `/2` o `/3` devuelven `Device Error`: hay que leer y escribir la lista
+   entera. Eso vuelve obligatorio el respaldo antes de tocar nada — un PUT mal armado se
+   lleva por delante el destino de producción.
 4. `POST /ISAPI/Event/notification/httpHosts/<ID>/test` → verifica que la cámara alcanza el host.
    Devuelve `errorCode 151` / `connect server fail` si no logra abrir el TCP. **Solo prueba la
    conexión**: no genera un POST que el listener registre, así que un `test` exitoso no significa
@@ -116,8 +131,10 @@ En orden, del lado nuestro hacia la cámara:
 4. ¿El httpHost está bien y alcanzable? `POST .../httpHosts/<ID>/test` → `errorCode 0` / `ok` si
    la cámara alcanza al gateway, `errorCode 151` / `connect server fail` si no. **Es la prueba que
    distingue "la cámara no manda" de "manda y no llega".** Ojo: el rechazo de TCP se ve idéntico a
-   un bloqueo de firewall. Y la cámara admite varios destinos (`/1`, `/2`, `/3`), así que agregá
-   el gateway en un slot libre en vez de sobrescribir el que ya está.
+   un bloqueo de firewall. Y la cámara admite varios destinos (`hostNumber` 3 en los modelos
+   verificados), así que para diagnosticar **agregá un receptor en una ranura libre en vez de
+   sobrescribir el de producción**: el gateway sigue contando mientras mirás el tráfico desde
+   otra máquina. Ojo con cómo se escribe: ver el punto 3 de "Los dos modos de recepción".
 5. ¿Hay ruta de vuelta? La cámara puede ser alcanzable **desde** el gateway y no poder alcanzarlo
    ella. Para aislarlo, apuntá el httpHost a un tercero vivo en la red destino: si también falla,
    es ruteo; si solo falla el listener, es el firewall o el proceso.
