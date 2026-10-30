@@ -101,9 +101,10 @@ cámara --HTTP POST XML--> peoplecounting.Listen (:8088)
 - sin `-camera`, la regla histórica: `RemoteAddr` con `192.168.188.21` → `id 1`, vacío → `id 1`,
   cualquier otra → `id 0`.
 
-**El keep-alive consulta la primera cámara de `-camera`.** Sin `-camera` queda la dirección
-histórica (`192.168.188.21`), para no alterar los equipos ya desplegados. Antes era *siempre* esa,
-y en un gateway con otro direccionamiento el `GET` fallaba cada ciclo: medido en FLO-W7-0138, con
+**El keep-alive consulta la primera cámara de `-camera`.** Sin `-camera` queda `192.168.188.21`,
+que es la dirección **estándar** de la cámara en el despliegue normal — no un valor heredado, sino
+el que de verdad tienen los equipos en campo. Antes era *siempre* esa, y en un equipo con otro
+direccionamiento —un banco de pruebas, una flota con otro plan de IPs— el `GET` fallaba cada ciclo: medido en FLO-W7-0138, con
 las cámaras en `.91` y `.93`, **dos `CounterDisconnected` falsos en cinco minutos** mientras las
 dos cámaras contaban sin problema. Una alarma que miente es peor que no tenerla, porque entrena a
 ignorar la que sí importa. Ojo con el ruteo: si los eventos llegan por NAT o port-forward, el

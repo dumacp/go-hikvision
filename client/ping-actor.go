@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	// pingIP es la dirección histórica del keep-alive, de cuando el binario atendía un
-	// solo despliegue. Se mantiene como respaldo para los equipos que corren SIN
-	// -camera, que siguen comportándose exactamente igual que antes.
+	// pingIP es la dirección ESTÁNDAR de la cámara en el despliegue normal, y el
+	// respaldo del keep-alive cuando no se pasa -camera. No está mal elegida: es la
+	// que de verdad tienen los equipos en campo, y por eso se conserva intacta.
 	pingIP = "192.168.188.21"
 )
 
@@ -22,8 +22,9 @@ type PingActor struct {
 	quit chan int
 	// addr es la cámara a la que se le hace el keep-alive. Vacío usa pingIP.
 	//
-	// Sin esto el actor consultaba SIEMPRE 192.168.188.21, que en un gateway con otro
-	// direccionamiento no existe: el GET falla cada ciclo y se publica un
+	// Sin esto el actor consultaba SIEMPRE pingIP, que es la dirección del despliegue
+	// estándar pero no la de un equipo con otro direccionamiento —un banco de pruebas,
+	// una flota con otro plan de IPs—. Ahí el GET falla cada ciclo y se publica un
 	// CounterDisconnected cada 300 s mientras las cámaras funcionan y cuentan. Medido
 	// en FLO-W7-0138, con las cámaras en 192.168.186.91 y .93: dos falsas alarmas en
 	// cinco minutos. Una alarma que miente es peor que no tenerla, porque entrena a
