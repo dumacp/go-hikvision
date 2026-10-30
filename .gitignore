@@ -10,3 +10,9 @@
 # artefactos locales de prueba
 *.log
 /tmp/
+
+# credenciales locales — NUNCA deben entrar al repo
+# .CRED_ADMIN  lleva usuario y clave de administracion de las camaras
+# sa-clips.json es la llave privada de la service account de GCS
+/.CRED_ADMIN
+/sa-clips.json

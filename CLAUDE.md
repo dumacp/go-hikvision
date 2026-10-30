@@ -680,11 +680,12 @@ NTP en la flota: corregir la hora **provoca** ese salto.
 
 Y del lado del repo:
 
-- `go test ./...` **falla**, y siempre por lo mismo:
-  [peoplecounting/listenner_test.go](peoplecounting/listenner_test.go) es un esqueleto de `gotests`
-  con `want: nil` sin completar. El parser funciona; el caso de prueba nunca se terminó de
-  escribir. `./isapi/` sí pasa, así que compará antes y después en vez de leer el `FAIL` global
-  como una regresión tuya.
+- `go test ./...` **pasa completo**, y conviene que siga así. Hasta la 1.0.39 fallaba siempre por
+  lo mismo: [peoplecounting/listenner_test.go](peoplecounting/listenner_test.go) era un esqueleto
+  de `gotests` con `want: nil` sin completar — el parser funcionaba, el caso de prueba nunca se
+  terminó de escribir. Ya está completo y cubre lo que no depende del modelo de cámara: cada
+  `eventType` en su rama, los dos nombres del tamper, el cuerpo sin declaración `<?xml ?>` y los
+  cuerpos que deben fallar. Un `FAIL` global ahora **sí** es una regresión.
 - Código muerto conservado a propósito: `client/_business/` (copia previa de los actores),
   `client/pubsub-actor.go_`, `client/service/service.go_`.
 - `client/comm/grpc`, `client/comm/pubsub` y `client/service` definen una interfaz de servicio
