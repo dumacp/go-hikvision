@@ -323,6 +323,29 @@ despierta cuando pasa un pasajero, y el disco hay que verlo venir aunque no pase
 del gateway, así que sale **una vez por ciclo**, con el primer resultado sano, no una vez por
 cámara.
 
+**El `starttime` de la URL NO va siempre en UTC, y el sufijo `Z` miente.** Medido contra la
+DS-2XM6825G1 (V4.2.2) a las 17:53 locales, UTC−5:
+
+```
+starttime=20261030T225358Z   (UTC)              -> 500 Internal Server Error
+starttime=20261030T175358Z   (reloj de pared)   -> 161 KB, 194 fotos, hueco 0.10 s
+```
+
+Esa cámara lee el campo como **su hora local**, así que pedirle en UTC es pedirle un instante
+cinco horas en el futuro — y un futuro sin grabar responde `500`, igual que una tarjeta rota. La
+G0 sí quiere UTC. `Request.HoraLocal` elige, y `Extract` lo resuelve solo: **intenta primero UTC
+—la convención de las cámaras en campo— y solo reintenta con la hora local si falla**, de modo que
+un equipo desplegado no puede regresionar por esto. `Result.HoraLocal` dice cuál funcionó, para
+cachearlo por cámara y ahorrar el intento fallido.
+
+**Y la lección que costó cara: un `500` significa "no hay grabación EN ESE INSTANTE", no "esta
+cámara no graba".** Leerlo como lo segundo llevó a cambiar una microSD, formatear cuatro veces,
+reiniciar cinco, hacer un reset de fábrica —que borró la calibración de conteo y dejó la puerta
+sin contar— y actualizar el firmware, todo persiguiendo un fallo que estaba en el parámetro. La
+señal que lo delataba estuvo disponible desde el principio: **el stream en vivo funcionaba
+perfecto mientras la reproducción fallaba.** Cuando un equipo responde bien por un camino y mal
+por otro, el sospechoso es cómo se le pregunta, no el hardware.
+
 Cuatro cosas medidas contra una cámara real que explican el diseño:
 
 - **Pedir un instante sin grabación no da error: devuelve el tramo disponible más cercano.** Por

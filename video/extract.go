@@ -55,6 +55,24 @@ type Request struct {
 	// renombra al terminar: el rename es atómico, así que un proceso que recorra
 	// el directorio nunca ve un archivo a medio escribir.
 	Dest string
+	// HoraLocal dice que el `starttime` de la URL va en el RELOJ DE PARED de la
+	// cámara en vez de en UTC.
+	//
+	// Las dos generaciones no lo interpretan igual, y el sufijo `Z` de ese campo
+	// miente en una de ellas. Medido contra la DS-2XM6825G1 (V4.2.2) a las 17:53
+	// locales (UTC−5):
+	//
+	//	starttime=20261030T225358Z  (UTC)    -> 500, se lee como "no hay grabación"
+	//	starttime=20261030T175358Z  (local)  -> 161 KB, 194 fotos
+	//
+	// Pedir en UTC a esa cámara es pedirle un instante CINCO HORAS EN EL FUTURO, y
+	// un futuro sin grabar responde igual que una tarjeta rota. Ese 500 costó un
+	// cambio de microSD, cuatro formateos, cinco reinicios, un reset de fábrica y
+	// una actualización de firmware antes de que nadie sospechara del parámetro.
+	//
+	// Quien no sepa cuál corresponde deja esto en false y llama a Extract, que lo
+	// resuelve probando; Result.HoraLocal dice cuál funcionó, para cachearlo.
+	HoraLocal bool
 }
 
 // Result resume lo extraído.
@@ -74,20 +92,32 @@ type Result struct {
 	// de emitir fotos: medido, un hueco de 5.7 s en un clip de 10 segundos, que es
 	// exactamente el "no se vio bien el paso de la persona".
 	MaxGap time.Duration
+	// HoraLocal dice con qué convención de `starttime` se obtuvo ESTE clip.
+	//
+	// Quien extraiga varias veces de la misma cámara debería guardarlo y pasarlo en
+	// la Request siguiente: así se ahorra el intento fallido de la detección.
+	HoraLocal bool
 }
 
 // PlaybackURL arma la URL de reproducción por hora.
 //
-// El formato de starttime es el compacto UTC que devuelve la propia cámara en el
+// El formato de starttime es el compacto que devuelve la propia cámara en el
 // playbackURI de una búsqueda ("20260818T155900Z"). El separado por guiones también
 // funciona, pero se usa el compacto por ser el que emite el equipo.
+//
+// El sufijo `Z` NO significa que el instante vaya en UTC: hay cámaras que leen ese
+// campo como su reloj de pared. Lo decide HoraLocal; ver el comentario del campo.
 func (r Request) PlaybackURL() string {
 	host := r.Host
 	if filepath.Ext(host) == "" && !hasPort(host) {
 		host += ":554"
 	}
+	t := r.Start.UTC()
+	if r.HoraLocal {
+		t = r.Start
+	}
 	return fmt.Sprintf("rtsp://%s/Streaming/tracks/%d/?starttime=%s",
-		host, r.Track, r.Start.UTC().Format("20060102T150405Z"))
+		host, r.Track, t.Format("20060102T150405Z"))
 }
 
 func hasPort(host string) bool {
@@ -211,7 +241,35 @@ func nuevoFlujo(desc *description.Session) (*flujoCodec, error) {
 	return nil, errors.New("video: la cámara no ofrece un stream H.264 ni H.265")
 }
 
+// Extract recorta un tramo grabado y lo escribe como MP4.
+//
+// Si req.HoraLocal viene en false, PRIMERO intenta la convención histórica (UTC) y solo
+// si falla reintenta con el reloj de pared de la cámara. El orden importa y es el que
+// hace seguro el cambio: las cámaras en campo siguen resolviéndose en el primer intento
+// y no pueden regresionar por esto. Si los dos fallan se devuelve el error del PRIMERO,
+// que es el que describe la configuración esperada.
+//
+// Pasar HoraLocal ya resuelto evita el intento fallido; Result.HoraLocal lo informa para
+// que quien llame lo guarde por cámara.
 func Extract(ctx context.Context, req Request) (*Result, error) {
+	res, err := extraer(ctx, req)
+	if err == nil || req.HoraLocal {
+		return res, err
+	}
+	// El reintento solo tiene sentido cuando las dos formas difieren: con la cámara
+	// en UTC dan la misma URL y repetir sería pagar dos veces el mismo fallo.
+	if _, desfase := req.Start.Zone(); desfase == 0 {
+		return res, err
+	}
+	alt := req
+	alt.HoraLocal = true
+	if res2, err2 := extraer(ctx, alt); err2 == nil {
+		return res2, nil
+	}
+	return res, err
+}
+
+func extraer(ctx context.Context, req Request) (*Result, error) {
 	if req.Duration <= 0 {
 		return nil, fmt.Errorf("video: duración inválida %v", req.Duration)
 	}
@@ -315,6 +373,7 @@ func Extract(ctx context.Context, req Request) (*Result, error) {
 	}
 	res.Codec = flujo.nombre
 	res.Elapsed = time.Since(inicio)
+	res.HoraLocal = req.HoraLocal
 	return res, nil
 }
 
