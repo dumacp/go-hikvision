@@ -30,18 +30,11 @@ message Event {
 	// uid identifica de forma inequivoca este paso contado. Viaja al evento de MQTT y
 	// al nombre del sidecar del clip, y es la llave con la que la plataforma une ambos.
 	string uid = 5;
-	// delta dice que `value` es un INCREMENTO y no el acumulado de la camara.
-	//
-	// La DS-2XM6825G0 reporta acumulados del dia y CountingActor obtiene el paso
-	// restando contra el ultimo valor guardado. La DS-2XM6825G1 no expone un acumulado:
-	// manda el conteo de una ventana de tiempo (eventType "counting"), y ese numero YA
-	// es el incremento. Sin esta marca habria que mantener un acumulado sintetico en
-	// memoria, que tras cada reinicio del binario arranca desfasado del valor persistido
-	// y hace que la primera ventana se descarte.
-	//
-	// Un evento viejo reproducido desde la boltdb no trae el campo, asi que vale false y
-	// el camino de siempre queda igual.
-	bool delta = 6;
+	// El 6 fue `bool delta`, el conteo por ventana de la DS-2XM6825G1 con firmware
+	// V3.2.2. Ese camino se quito y el campo nunca se publico, pero las boltdb de las
+	// pruebas del 2026-10-30 tienen eventos con esa etiqueta y se replican al arrancar.
+	// Reservado para que nadie le de otro tipo al numero y los lea mal.
+	reserved 6;
 }
 
 message Snapshot {

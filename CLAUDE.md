@@ -146,12 +146,18 @@ eventType "counting": la camara esta en firmware V3.2.2 y reporta por ventana, n
 cruce. Actualizala a V4.2.2 o posterior
 ```
 
-**Queda una excepción deliberada: la aritmética de `Delta` en `CountingActor`.** Ese campo del
-`.proto` (número 6, **nunca reutilizar**) lo ponía el camino de ventana, y las boltdb ya
-desplegadas tienen eventos marcados así que **se replican al reiniciar**. Sin esa rama se leerían
-como acumulados y el estado recuperado quedaría mal. Nadie debe volver a producir eventos con
-`Delta`: si aparece uno nuevo, algo está mandando conteo de ventana y hay que mirar el firmware de
-esa cámara.
+**Se quitó entero, sin dejar excepciones.** Ese camino traía además un campo `delta` en el
+`.proto` para marcar que `value` era un incremento y no el acumulado, y con él una rama aparte en
+la aritmética de `CountingActor`. Las dos cosas se eliminaron: `client/counting-actor.go` volvió a
+ser **idéntico** al de antes de todo esto salvo por `pingAddr`, y hoy hay **una sola** regla de
+conteo. El campo nunca llegó a publicarse —vivió solo en los commits de este trabajo—, pero el
+número **6 quedó `reserved`**: las boltdb de las pruebas del 2026-10-30 tienen eventos con esa
+etiqueta y se replican al arrancar, así que darle otro tipo al número los haría leer mal.
+
+**Antes de correr el binario nuevo en un equipo que probó el formato de ventana, borra su
+`/SD/boltdbs/countingdb`.** Hoy eso es solo el banco FLO-W7-0138: ningún equipo en campo corrió
+nunca un binario con el campo. Medido en las copias guardadas: la base de pruebas tenía 4 eventos
+con `delta`, y la copia del gateway ninguno.
 
 **Un `eventType` desconocido da error con su nombre y la IP de origen.** Antes el `switch` sin
 rama `default` devolvía `(nil, nil)`, el handler mandaba un `Event{Data: nil}` al canal, el type
