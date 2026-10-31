@@ -52,7 +52,7 @@ plataforma procese el conteo que le corresponde.
 | 1.0.37 | `CAMERATIME` gana `video_codec`, `video_fps`, `smart_codec` |
 | 1.0.38 | `CAMERATIME` gana `video_dir`, `video_dir_free_mb` y los estados `videodir`/`videodir_ok` |
 | 1.0.39 | `-withoutEventID` permite volver al `COUNTERSDOOR` previo a 1.0.32 |
-| sin publicar | `storage` puede traer el valor `nooverwrite` |
+| 1.0.40 | `storage` puede traer el valor `nooverwrite` |
 
 **`event_id` es el único campo que se agregó a un mensaje que ya existía.** Verificado
 comparando el conjunto de etiquetas `json:` contra la versión anterior, y confirmado

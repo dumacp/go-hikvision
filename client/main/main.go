@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	showVersion = "1.0.39"
+	showVersion = "1.0.40"
 )
 
 var debug bool
