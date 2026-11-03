@@ -776,6 +776,23 @@ lo lee como nivel bajo. Un pad sin el camino de entrada habilitado (SION) daría
 O sea que la diferencia es **ambigua desde el software y siempre lo va a ser**. Lo único
 que la resuelve es un multímetro en la base del transistor.
 
+Esa lectura de registros está en el propio binario, para no tener que copiar nada al
+equipo cuando haga falta diagnosticar:
+
+```bash
+./hikvision -gpioRegisters 165
+```
+
+Solo lee, no escribe. Va en este binario por conveniencia operativa —es el que ya está
+desplegado en todos los gateways— pero **no es una herramienta de Hikvision**: no sabe
+nada de cámaras, es específica del SoC y le serviría igual a `go-ignition` o `go-doors`.
+Si otro proyecto la necesita, el lugar correcto es tooling compartido, no copiar
+`client/main/gpioregisters.go`.
+
+Usa `mmap` y no `read` porque en ARM las regiones de periféricos no están en el mapa
+lineal del kernel: un `dd if=/dev/mem` falla con `Bad address` aunque
+`CONFIG_STRICT_DEVMEM` esté desactivado.
+
 Por eso `ErrNivelNoVerificado` es un error **aparte** y quien llama recibe igual una
 `SalidaGPIO` usable: al arrancar se deja un WARN y se sigue. Tratarlo como falla
 detendría el binario entero, y **el conteo de pasajeros no se negocia por el cableado de

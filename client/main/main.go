@@ -55,6 +55,7 @@ var encoderMinUptime time.Duration
 var cameraPowerGPIO int
 var cameraPowerOffLevel int
 var cameraPowerSet int
+var gpioRegisters int
 var cameraPowerOffDelay time.Duration
 var cameraBootDelay time.Duration
 
@@ -179,6 +180,11 @@ func init() {
 	flag.IntVar(&cameraPowerOffLevel, "cameraPowerOffLevel", 1,
 		"level (0 or 1) that means POWER OFF on -cameraPowerGPIO; the complement means "+
 			"power on and is what the line is driven to at startup")
+	flag.IntVar(&gpioRegisters, "gpioRegisters", -1,
+		"read the SoC registers (GDIR, DR, PSR) of a sysfs GPIO line and exit. Diagnostic "+
+			"only, it writes nothing: the sysfs value file returns the pad level on i.MX, so it "+
+			"cannot tell \"the software did not drive the pin\" from \"it did and the "+
+			"hardware does not follow\". Comparing DR against PSR can")
 	flag.IntVar(&cameraPowerSet, "cameraPowerSet", -1,
 		"drive -cameraPowerGPIO to this level (0 or 1) and exit, WITHOUT starting the "+
 			"counter. Use it against the real vehicle to find out which level powers the "+
@@ -204,6 +210,11 @@ func main() {
 
 	if encryptCreds {
 		os.Exit(printEncryptedCredentials())
+	}
+
+	// Diagnostico de solo lectura, antes que nada porque no toca el estado.
+	if gpioRegisters >= 0 {
+		os.Exit(mostrarRegistrosGPIO(gpioRegisters))
 	}
 
 	// Modo utilitario: deja la linea en el nivel pedido y termina. Va junto a
