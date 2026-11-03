@@ -753,18 +753,28 @@ contradigan. Y después de escribir se **relee**: sysfs acepta la escritura y el
 puede no quedar, igual que pasa con el perfil de codificación de la cámara.
 
 **Pero esa relectura NO es terminal, y eso se decidió midiendo.** En FLO-W7-0138 (i.MX6,
-kernel 4.1.15), con el relé **todavía sin cablear**:
+kernel 4.1.15), el `gpio165` acepta `direction=out`, acepta el write a `value`, y `value`
+lee `0` siempre.
+
+**El sysfs NO alcanza para saber qué pasa**, y confundirlo cuesta: el driver de i.MX
+(`gpio-mxc.c`) registra el **PSR** como registro de lectura, así que `value` devuelve el
+nivel **eléctrico del pad**, no lo que pedimos. Leyendo los registros del bloque por
+`/dev/mem` queda claro (GPIO6 en `0x020B0000`, `GPIO6_IO05` = bit 5):
 
 ```
-echo high > direction   → aceptado, direction=out  value=0
-echo 1    > value       → aceptado, direction=out  value=0
-/sys/kernel/debug/gpio  → gpio-165 (sysfs) out lo
+         con value=1 pedido          tras volver a 0
+GDIR     bit 5 = 1  (SALIDA)         bit 5 = 1
+DR       bit 5 = 1  ← lo pedido      bit 5 = 0
+PSR      bit 5 = 0  ← lo que ve      bit 5 = 0
 ```
 
-El valor nunca se mueve. En i.MX el `value` de una **salida** lee el registro de estado
-del pad —el nivel eléctrico real— y no lo que pedimos: con el pad al aire lee `0` hagamos
-lo que hagamos. Así que la diferencia es **ambigua**: puede ser un pin sin muxear o
-simplemente un pad que todavía nadie conectó.
+**El SoC sí maneja el pin**: el registro de datos tiene exactamente lo que le pedimos, en
+los dos niveles. Lo que no lo confirma es la lectura. Con la GPIO en la **base de un
+transistor** eso es lo esperado: la unión base-emisor clampea a ~0.7 V y un pad de 3.3 V
+lo lee como nivel bajo. Un pad sin el camino de entrada habilitado (SION) daría lo mismo.
+
+O sea que la diferencia es **ambigua desde el software y siempre lo va a ser**. Lo único
+que la resuelve es un multímetro en la base del transistor.
 
 Por eso `ErrNivelNoVerificado` es un error **aparte** y quien llama recibe igual una
 `SalidaGPIO` usable: al arrancar se deja un WARN y se sigue. Tratarlo como falla
