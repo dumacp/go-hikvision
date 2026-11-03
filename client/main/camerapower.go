@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -26,7 +27,8 @@ func aplicarNivelGPIO(pin, nivel int) int {
 	}
 
 	salida, err := client.NuevaSalidaGPIO(pin, nivel)
-	if err != nil {
+	noVerificado := errors.Is(err, client.ErrNivelNoVerificado)
+	if err != nil && !noVerificado {
 		fmt.Fprintf(os.Stderr, "no se pudo manejar la gpio %d: %s\n", pin, err)
 		return 1
 	}
@@ -40,11 +42,20 @@ func aplicarNivelGPIO(pin, nivel int) int {
 		return 1
 	}
 
-	fmt.Printf("gpio %d = %d\n", pin, v)
+	fmt.Printf("gpio %d: se pidió %d y lee %d\n", pin, nivel, v)
+	if noVerificado {
+		fmt.Printf("\nOJO: la escritura se hizo pero la línea lee %d.\n", v)
+		fmt.Printf("En este hardware (i.MX) el `value` de una salida lee el nivel ELÉCTRICO\n")
+		fmt.Printf("del pad, no lo que pedimos. Con el relé sin cablear lee 0 siempre, así que\n")
+		fmt.Printf("esto es lo ESPERADO hasta que el pin esté conectado. Si ya está conectado y\n")
+		fmt.Printf("sigue leyendo %d, el pin no está muxeado como GPIO y hay que ver el hardware.\n", v)
+	}
+	// Se recomienda el nivel que se ESCRIBIÓ, no el que se lee: lo que hace reaccionar
+	// al relé es lo que manejamos, y con el pad sin cablear la lectura no lo refleja.
 	fmt.Printf("\nMirá la cámara ahora:\n")
-	fmt.Printf("  - si se APAGÓ, configurá  -cameraPowerGPIO %d -cameraPowerOffLevel %d\n", pin, v)
+	fmt.Printf("  - si se APAGÓ, configurá  -cameraPowerGPIO %d -cameraPowerOffLevel %d\n", pin, nivel)
 	fmt.Printf("  - si sigue ENCENDIDA, probá el otro nivel:  -cameraPowerGPIO %d -cameraPowerSet %d\n",
-		pin, 1-v)
-	fmt.Printf("\nLa línea queda en %d al salir; el binario de conteo la vuelve a tomar al arrancar.\n", v)
+		pin, 1-nivel)
+	fmt.Printf("\nSe dejó la línea manejada en %d; el binario de conteo la vuelve a tomar al arrancar.\n", nivel)
 	return 0
 }

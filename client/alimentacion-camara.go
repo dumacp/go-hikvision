@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
@@ -84,7 +85,7 @@ func (a *CountingActor) aplicarAlimentacion(ctx actor.Context, msg *MsgIgnition)
 	a.infoLog.Printf("ignition: vehiculo encendido, devolviendo alimentacion a la "+
 		"camara (gpio %d -> %d) y esperando %v a que arranque",
 		a.alimentacion.Pin(), a.nivelEncendido(), a.esperaArranque)
-	if err := a.alimentacion.Escribir(a.nivelEncendido()); err != nil {
+	if err := a.escribirLinea(a.nivelEncendido()); err != nil {
 		// Sin energía no hay conteo, así que esto es un ERROR y no un WARN. No se
 		// reintenta acá: el próximo evento de ignición lo vuelve a intentar, y
 		// mientras tanto el log y el evento dicen qué pasó.
@@ -102,7 +103,7 @@ func (a *CountingActor) cortarAlimentacion() {
 		a.buildLog.Println("ignition: corte obsoleto, el vehiculo volvio a encender")
 		return
 	}
-	if err := a.alimentacion.Escribir(a.nivelApagado); err != nil {
+	if err := a.escribirLinea(a.nivelApagado); err != nil {
 		a.errLog.Printf("ignition: no se pudo cortar la alimentacion de la camara: %s", err)
 		a.publicarAlimentacion("power_error")
 		return
@@ -122,6 +123,23 @@ func (a *CountingActor) camaraTerminoDeArrancar(ctx actor.Context) {
 	a.infoLog.Println("ignition: la camara ya tuvo tiempo de arrancar, se reanuda el dialogo")
 	a.avisarAlimentacion(ctx, true)
 	a.publicarAlimentacion("poweron")
+}
+
+// escribirLinea acciona la GPIO distinguiendo los dos fracasos posibles.
+//
+// Que la línea lea distinto de lo escrito NO es lo mismo que no poder manejarla: con el
+// pad sin cablear, en i.MX el `value` de una salida lee el nivel eléctrico real y da 0
+// hagamos lo que hagamos (ver ErrNivelNoVerificado). Tratarlo como fallo publicaría un
+// power_error en cada ciclo de llave por un cable que todavía no está. Se avisa una vez
+// por transición en WARN y se sigue, porque la escritura SÍ se hizo.
+func (a *CountingActor) escribirLinea(nivel int) error {
+	err := a.alimentacion.Escribir(nivel)
+	if errors.Is(err, ErrNivelNoVerificado) {
+		a.warnLog.Printf("ignition: %s; la escritura se hizo, pero no se puede confirmar "+
+			"el nivel hasta que el rele este conectado", err)
+		return nil
+	}
+	return err
 }
 
 // avisarAlimentacion reparte el estado a los tres hijos que le hablan a la cámara.

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,23 @@ const rutaSysfsGPIO = "/sys/class/gpio"
 // equipo (/usr/sbin/omvz7/switch.sh) resuelve esto con un `sleep 1` a ciegas; acá se
 // reintenta hasta que se pueda, que en el caso normal termina en el primer intento.
 const esperaExport = 2 * time.Second
+
+// ErrNivelNoVerificado dice que la escritura se hizo pero al releer la línea no tiene
+// el nivel pedido. NO es lo mismo que no poder manejarla, y por eso es un error aparte:
+// quien llama sigue teniendo una SalidaGPIO usable.
+//
+// Medido en FLO-W7-0138 (i.MX6, kernel 4.1.15) sobre el gpio165 **sin el relé
+// cableado**: `direction` acepta `out`, `high` y `low`, el write a `value` devuelve OK,
+// y el valor lee 0 siempre; `/sys/kernel/debug/gpio` también reporta `out lo`. En i.MX
+// el `value` de una SALIDA lee el registro de estado del pad, o sea el nivel eléctrico
+// real, no lo que pedimos: con el pad al aire o con pull-down, lee 0 hagamos lo que
+// hagamos.
+//
+// Por eso la diferencia es ambigua —puede ser un pin sin muxear, o simplemente un pad
+// todavía sin conectar— y tratarla como falla detendría el arranque del binario por el
+// cableado de un accesorio. El conteo de pasajeros no se negocia por eso: se avisa
+// fuerte y se sigue.
+var ErrNivelNoVerificado = errors.New("el nivel escrito no se pudo verificar al releer")
 
 // SalidaGPIO es una línea de GPIO configurada como salida, manejada por sysfs.
 //
@@ -83,12 +101,15 @@ func nuevaSalidaGPIOEn(raiz string, pin, nivelInicial int) (*SalidaGPIO, error) 
 	}
 
 	// Releer: sysfs acepta la escritura y después puede no haber quedado, igual que
-	// pasa con el perfil de codificación de la cámara. Si no quedó, mejor fallar ahora
-	// que creer que controlamos una línea que no controlamos.
-	if v, err := s.Leer(); err != nil {
+	// pasa con el perfil de codificación de la cámara. Pero acá la diferencia NO es
+	// terminal; ver ErrNivelNoVerificado.
+	v, err := s.Leer()
+	if err != nil {
 		return nil, fmt.Errorf("gpio %d: no se pudo verificar el nivel inicial: %w", pin, err)
-	} else if v != nivelInicial {
-		return nil, fmt.Errorf("gpio %d: se pidió nivel %d y quedó en %d", pin, nivelInicial, v)
+	}
+	if v != nivelInicial {
+		return s, fmt.Errorf("gpio %d: se pidió nivel %d y lee %d: %w",
+			pin, nivelInicial, v, ErrNivelNoVerificado)
 	}
 
 	return s, nil
@@ -108,6 +129,13 @@ func (s *SalidaGPIO) Escribir(nivel int) error {
 	}
 	if err := escribirArchivo(filepath.Join(s.dirPin(), "value"), strconv.Itoa(nivel)); err != nil {
 		return fmt.Errorf("gpio %d: %w", s.pin, err)
+	}
+	v, err := s.Leer()
+	if err != nil {
+		return fmt.Errorf("gpio %d: escrito pero no se pudo releer: %w", s.pin, err)
+	}
+	if v != nivel {
+		return fmt.Errorf("gpio %d: se escribió %d y lee %d: %w", s.pin, nivel, v, ErrNivelNoVerificado)
 	}
 	return nil
 }

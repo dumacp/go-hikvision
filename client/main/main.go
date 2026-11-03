@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -320,7 +321,14 @@ func main() {
 			nivelEncendido = 0
 		}
 		salida, err := client.NuevaSalidaGPIO(cameraPowerGPIO, nivelEncendido)
-		if err != nil {
+		switch {
+		case errors.Is(err, client.ErrNivelNoVerificado):
+			// La línea se maneja pero lee distinto de lo que se le pidió. Es lo que
+			// pasa con el pad todavía sin cablear, así que NO detiene el arranque: el
+			// conteo de pasajeros no se negocia por el cableado de un accesorio.
+			warnlog.Printf("-cameraPowerGPIO: %s; se continúa, pero hasta confirmarlo "+
+				"con el relé conectado no se puede dar por hecho que la cámara se apague", err)
+		case err != nil:
 			log.Fatalf("-cameraPowerGPIO: %s", err)
 		}
 		counting.SetCameraPower(salida, cameraPowerOffLevel, cameraPowerOffDelay, cameraBootDelay)

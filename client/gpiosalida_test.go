@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -93,17 +94,44 @@ func TestSalidaGPIOEscribirYLeer(t *testing.T) {
 	}
 }
 
-// TestSalidaGPIOVerificaQueElNivelQuedo es la guarda que importa: sysfs acepta la
-// escritura y el valor puede no quedar. Si creyéramos que controlamos una línea que no
-// controlamos, apagaríamos la cámara "con éxito" sin apagarla, o peor, creeríamos
-// haberla encendido y el conteo quedaría muerto sin que nada fallara a la vista.
-func TestSalidaGPIOVerificaQueElNivelQuedo(t *testing.T) {
+// TestSalidaGPIOAvisaSiElNivelNoQuedaPeroSigueUsable fija la distinción que costó una
+// medición contra el equipo real.
+//
+// En FLO-W7-0138 (i.MX6, kernel 4.1.15), con el relé AÚN SIN CABLEAR, el gpio165 acepta
+// `direction` y acepta el write a `value`, y el valor lee 0 siempre; el propio
+// /sys/kernel/debug/gpio reporta `out lo`. En i.MX el `value` de una SALIDA lee el nivel
+// eléctrico real del pad, no lo que pedimos: con el pad al aire lee 0 hagamos lo que
+// hagamos.
+//
+// Por eso la diferencia es AMBIGUA —pin sin muxear, o pad todavía sin conectar— y no
+// puede ser terminal: si lo fuera, el binario se negaría a arrancar y el conteo de
+// pasajeros se detendría por el cableado de un accesorio. Se devuelve el aviso Y una
+// salida usable, para que quien llama decida.
+func TestSalidaGPIOAvisaSiElNivelNoQuedaPeroSigueUsable(t *testing.T) {
 	// Se pide nivel 1 pero el `value` del sysfs falso quedó en 0.
 	raiz := sysfsFalso(t, 164, 0)
-	if _, err := nuevaSalidaGPIOEn(raiz, 164, 1); err == nil {
-		t.Fatal("si el nivel no quedó, tiene que dar error")
-	} else if !strings.Contains(err.Error(), "quedó en 0") {
-		t.Errorf("el error debe decir qué quedó: %s", err)
+	s, err := nuevaSalidaGPIOEn(raiz, 164, 1)
+	if err == nil {
+		t.Fatal("si el nivel no quedó, tiene que avisar")
+	}
+	if !errors.Is(err, ErrNivelNoVerificado) {
+		t.Errorf("el aviso debe ser ErrNivelNoVerificado, es %v", err)
+	}
+	if !strings.Contains(err.Error(), "lee 0") {
+		t.Errorf("el aviso debe decir qué lee: %s", err)
+	}
+	if s == nil {
+		t.Fatal("la salida tiene que seguir siendo usable: el conteo no se detiene por esto")
+	}
+	// Y usable de verdad: sobre el sysfs falso —que es un archivo plano, donde la
+	// escritura sí pega— el ciclo normal funciona. El caso del hardware, donde el write
+	// se acepta y el valor no se mueve, no se puede montar con archivos planos; queda
+	// cubierto por el camino del constructor, que comparte la misma verificación.
+	if err := s.Escribir(1); err != nil {
+		t.Errorf("la salida debe seguir sirviendo: %s", err)
+	}
+	if v, _ := s.Leer(); v != 1 {
+		t.Errorf("tras Escribir(1) lee %d", v)
 	}
 }
 

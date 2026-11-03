@@ -752,6 +752,26 @@ al arrancar el binario. El nivel de "encendida" **se deriva** como complemento d
 contradigan. Y después de escribir se **relee**: sysfs acepta la escritura y el valor
 puede no quedar, igual que pasa con el perfil de codificación de la cámara.
 
+**Pero esa relectura NO es terminal, y eso se decidió midiendo.** En FLO-W7-0138 (i.MX6,
+kernel 4.1.15), con el relé **todavía sin cablear**:
+
+```
+echo high > direction   → aceptado, direction=out  value=0
+echo 1    > value       → aceptado, direction=out  value=0
+/sys/kernel/debug/gpio  → gpio-165 (sysfs) out lo
+```
+
+El valor nunca se mueve. En i.MX el `value` de una **salida** lee el registro de estado
+del pad —el nivel eléctrico real— y no lo que pedimos: con el pad al aire lee `0` hagamos
+lo que hagamos. Así que la diferencia es **ambigua**: puede ser un pin sin muxear o
+simplemente un pad que todavía nadie conectó.
+
+Por eso `ErrNivelNoVerificado` es un error **aparte** y quien llama recibe igual una
+`SalidaGPIO` usable: al arrancar se deja un WARN y se sigue. Tratarlo como falla
+detendría el binario entero, y **el conteo de pasajeros no se negocia por el cableado de
+un accesorio**. Lo que sí es terminal es no poder exportar la línea o no poder fijarle la
+dirección: ahí de verdad no la controlamos.
+
 Secuencia, con el plazo en medio a propósito:
 
 ```
