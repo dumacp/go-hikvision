@@ -53,6 +53,7 @@ var encoderMinUptime time.Duration
 
 var cameraPowerGPIO int
 var cameraPowerOffLevel int
+var cameraPowerSet int
 var cameraPowerOffDelay time.Duration
 var cameraBootDelay time.Duration
 
@@ -177,6 +178,10 @@ func init() {
 	flag.IntVar(&cameraPowerOffLevel, "cameraPowerOffLevel", 1,
 		"level (0 or 1) that means POWER OFF on -cameraPowerGPIO; the complement means "+
 			"power on and is what the line is driven to at startup")
+	flag.IntVar(&cameraPowerSet, "cameraPowerSet", -1,
+		"drive -cameraPowerGPIO to this level (0 or 1) and exit, WITHOUT starting the "+
+			"counter. Use it against the real vehicle to find out which level powers the "+
+			"camera off, then set -cameraPowerOffLevel to it")
 	flag.DurationVar(&cameraPowerOffDelay, "cameraPowerOffDelay", 20*time.Second,
 		"how long to wait after the shutdown signal before cutting power, so the clip "+
 			"being extracted can finish. Extraction runs in real time, so a 16s clip "+
@@ -198,6 +203,12 @@ func main() {
 
 	if encryptCreds {
 		os.Exit(printEncryptedCredentials())
+	}
+
+	// Modo utilitario: deja la linea en el nivel pedido y termina. Va junto a
+	// -encryptCredentials y antes de cualquier otra cosa, porque no levanta el conteo.
+	if cameraPowerSet >= 0 {
+		os.Exit(aplicarNivelGPIO(cameraPowerGPIO, cameraPowerSet))
 	}
 
 	initLogs(debug, logStd, logXML)

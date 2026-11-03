@@ -676,6 +676,25 @@ Deshabilitado salvo que se pase `-cameraPowerGPIO`: sin él no se crea el actor,
 escucha nada y el binario se comporta como antes de que esto existiera. Flags:
 `-cameraPowerOffLevel` (1), `-cameraPowerOffDelay` (20s), `-cameraBootDelay` (2m).
 
+**La línea y la polaridad son configurables a propósito**, porque dependen del cableado
+de cada equipo y no se pueden adivinar desde el binario. `-cameraPowerGPIO` es el número
+de línea y `-cameraPowerOffLevel` el nivel que significa APAGAR; el de encender se
+**deriva** como complemento, así que con un solo número se invierte toda la lógica y no
+existe la combinación imposible de dos flags que se contradigan.
+
+**Y hay un modo utilitario para averiguar la polaridad sin arriesgar nada**, porque
+equivocarse es caro: si `-cameraPowerOffLevel` queda al revés, el binario arranca
+poniendo la línea en lo que cree que es "encendida", la cámara se queda sin energía, y el
+`CAMERAPOWER` informa `poweron` mientras nadie cuenta.
+
+```bash
+./hikvision -cameraPowerGPIO 165 -cameraPowerSet 1   # deja la línea en 1 y TERMINA
+```
+
+No levanta el conteo, relee el valor en vez de confiar en la escritura, y dice qué
+configurar según lo que se observe en la cámara. Es para que el equipo de apoyo pruebe
+los dos niveles contra el vehículo real y recién después fije el flag.
+
 **La señal viene de `go-ignition` por MQTT**, no por protoactor remote. Ese binario
 corre en el mismo gateway (`/usr/sbin/omvz7/ignition`) y publica en `EVENTS/ignition`:
 
