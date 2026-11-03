@@ -31,11 +31,11 @@ Todos los mensajes tienen la misma forma:
 | Tópico | Mensajes | ¿Nuevo? |
 |---|---|---|
 | `EVENTS/backcounter` | `COUNTERSDOOR`, `TAMPERING`, `CounterDisconnected` | no |
-| `EVENTS/counterevents` | `CAMERATIME`, `COUNTERSDOORVIDEO` | **los dos mensajes, sí** |
+| `EVENTS/counterevents` | `CAMERATIME`, `COUNTERSDOORVIDEO`, `CAMERAPOWER` | **los tres mensajes, sí** |
 | `COUNTERSMAPDOOR` | acumulados por puerta | no |
 | `camera/doors` | `DOORS`, pedido de estado de puertas | no |
 
-**Los dos mensajes nuevos van a `EVENTS/counterevents`, no a `EVENTS/backcounter`.** Un
+**Los mensajes nuevos van a `EVENTS/counterevents`, no a `EVENTS/backcounter`.** Un
 consumidor del tópico histórico no los ve, y por eso agregarlos no pudo romper nada que ya
 funcionara.
 
@@ -241,3 +241,43 @@ reinicios, no los incrementos.
 
 Tópico `DOORS`, con respuesta en `camera/doors`. **Sin cambios.** Es hacia el sistema de
 puertas, no hacia la plataforma.
+
+
+---
+
+## `CAMERAPOWER` — la cámara se apagó a propósito  🆕
+
+Tópico `EVENTS/counterevents`. Solo lo emiten los equipos configurados con
+`-cameraPowerGPIO`, que le cortan la energía a la cámara cuando el vehículo se apaga.
+
+```json
+{"timestamp":1793335980.405,"type":"CAMERAPOWER","value":{
+  "type":"CAMERA",
+  "status":"poweroff",
+  "gpio":164,
+  "level":1,
+  "source":"ignition"
+}}
+```
+
+| `status` | qué pasó |
+|---|---|
+| `poweroff` | se cortó la energía: el vehículo se apagó |
+| `poweron` | volvió la energía y la cámara ya tuvo tiempo de arrancar |
+| `power_error` | la escritura a la GPIO falló; la línea **no** está donde dice la configuración |
+
+**Este es el mensaje que distingue "apagada a propósito" de "averiada".** Sin él, un equipo
+con la cámara sin energía durante la noche se ve exactamente igual que uno con la cámara
+rota: los dos dejan de contar y los dos se quedan callados. Si van a consumir un solo
+mensaje de este tópico, que sea este.
+
+Va **una publicación por transición**, nunca por ciclo, con el mismo criterio que
+`storage`/`storage_ok` del `CAMERATIME`.
+
+**Mientras el último `status` sea `poweroff`, la ausencia de conteo es la esperada**, y
+tampoco van a llegar `CAMERATIME` ni `COUNTERSDOORVIDEO` de esa cámara. El binario deja de
+consultarla a propósito, así que **tampoco publica `CounterDisconnected`**: ese evento sigue
+significando lo que significaba, una cámara que debería responder y no responde.
+
+`gpio` y `level` son la línea y el nivel que significa apagado. Van en el mensaje para poder
+auditar cómo quedó configurado cada equipo sin entrar por SSH.

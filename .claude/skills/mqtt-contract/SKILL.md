@@ -18,7 +18,7 @@ contractual, no como refactor. Si lo cambias, actualiza esta skill en el mismo c
 |---|---|---|---|
 | `COUNTERSMAPDOOR` | `topicCounter` | cada 45 s y tras snapshot/replay | acumulados por puerta |
 | `EVENTS/backcounter` | `topicEvents` | por cada paso validado, y al perder la cámara | `COUNTERSDOOR` / `CounterDisconnected` |
-| `EVENTS/counterevents` | `topicAddEvents` | por cada tamper, por cada clip escrito, y al corregir o detectar deriva en el reloj de una cámara | `TAMPERING`, `COUNTERSDOORVIDEO`, `CAMERATIME` |
+| `EVENTS/counterevents` | `topicAddEvents` | por cada tamper, por cada clip escrito, al corregir o detectar deriva en el reloj de una cámara, y al cortarle o devolverle la energía | `TAMPERING`, `COUNTERSDOORVIDEO`, `CAMERATIME`, `CAMERAPOWER` |
 | `DOORS` | — | al arrancar `DoorsActor` | pide que le publiquen estados de puerta |
 
 `QoS 0`, sin retain, timeout de publicación 3 s.
@@ -114,6 +114,28 @@ Tres cosas que hay que entender de este mensaje antes de tocarlo:
   mensaje y `clip` se repite. Es deliberado: permite un cruce 1 a 1 por `event_id` sin desarmar
   listas.
 
+`type: "CAMERAPOWER"`, del `CountingActor`, cuando se le corta o se le devuelve la energía a la
+cámara por la GPIO de `-cameraPowerGPIO`. Una publicación **por transición**, nunca por ciclo:
+
+```json
+{"timestamp":1793335980.405,"type":"CAMERAPOWER",
+ "value":{"type":"CAMERA","status":"poweroff","gpio":164,"level":1,"source":"ignition"}}
+```
+
+- `status` es `poweroff` (se cortó la energía porque `go-ignition` avisó que el vehículo se
+  apagó), `poweron` (volvió la energía y la cámara ya tuvo su `-cameraBootDelay` para arrancar)
+  o `power_error` (la escritura a sysfs falló; la línea **no** está en el nivel que dice la
+  configuración y hay que mirar el equipo).
+- **Este mensaje es lo que distingue "apagada a propósito" de "averiada".** Sin él, un equipo con
+  la cámara sin energía por el apagado nocturno se ve exactamente igual que uno con la cámara
+  rota: los dos dejan de contar y los dos se quedan callados. Si la plataforma solo consume un
+  tipo de este tópico, que sea este.
+- `gpio` y `level` son la línea y el nivel que significa apagado, para poder auditar la
+  configuración del equipo desde la plataforma sin entrar por SSH.
+- **Mientras `status` sea `poweroff` no hay que esperar `CAMERATIME` ni `COUNTERSDOORVIDEO`** de
+  esa cámara, y la ausencia de conteo es la esperada. El binario además deja de consultarla, así
+  que tampoco va a publicar `CounterDisconnected`.
+
 `type: "CAMERATIME"`, del `CameraActor`, cuando corrige la configuración de hora de una cámara o
 cuando detecta que su reloj derivó:
 
@@ -180,6 +202,7 @@ cuando detecta que su reloj derivó:
 | `EVENTS/doors` | `parsePubSubDoorsEvents` | estado de puerta (`pubsub.Message` con `{coord,id,state}`) |
 | `camera/doors` | `parseDoorsEvents` | estado de puerta (`api.DoorState` de `go-doors`) |
 | `GPS` | `parseGPSEvents` | trama NMEA cruda; solo se guarda si empieza con `$GPRMC` |
+| `EVENTS/ignition` | `parseIgnitionEvents` | estado del vehículo, de `go-ignition`; **solo con `-cameraPowerGPIO`** |
 
 Los dos formatos de puerta coexisten por compatibilidad: `EVENTS/doors` es el histórico,
 `camera/doors` es el que responde `go-doors` tras el `DoorsStateRequest` publicado en `DOORS`.
@@ -188,6 +211,30 @@ Ambos terminan en el mismo `MsgDoor{ID, Value}`.
 El estado de puerta **habilita o bloquea el conteo** (ver reglas de gating en CLAUDE.md): si
 estos tópicos no llegan, la puerta se considera cerrada y los pasos se descartan con WARN.
 Es el segundo motivo más común de "no cuenta" después del `Content-Type` del XML.
+
+### `EVENTS/ignition` — apagado de la cámara
+
+Lo publica **`go-ignition`**, que corre en el mismo gateway. Solo se escucha cuando se pasa
+`-cameraPowerGPIO`; sin ese flag nadie se suscribe. Payloads reales capturados del equipo:
+
+```json
+{"value":{"state":1},"timestamp":1793335980.405281,"type":"SUSPEND_EVT"}
+{"value":{"state":1},"timestamp":1793335980.401813,"type":"IgnitionEvent"}
+```
+
+| campo | |
+|---|---|
+| `value.state` | `0` NA, `1` UP (encendido), `2` DOWN (apagado) |
+| `value.coord` | trama del GPS, opcional; se ignora |
+| `timestamp` | **segundos con fracción**, no milisegundos |
+| `type` | `SUSPEND_EVT` o `IgnitionEvent` |
+
+**Solo se actúa sobre `SUSPEND_EVT`.** `go-ignition` lo emite junto a su `PowerEvent`
+interno, o sea después de su propio periodo de gracia tras la llave: ya viene antirrebote.
+El `IgnitionEvent` es el estado crudo y solo se registra.
+
+`state: 0` (NA) se **descarta**: es "no sé", y tratarlo como apagado dejaría la cámara sin
+energía por un dato que el propio `go-ignition` declara desconocido.
 
 ## Notas de implementación
 

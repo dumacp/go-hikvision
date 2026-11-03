@@ -64,7 +64,8 @@ root
 │   ├── ping          PingActor      → keep-alive HTTP a la cámara
 │   ├── gps           GPSActor       → última trama $GPRMC
 │   ├── video         VideoActor     → recorta el video de cada paso (solo con -videoDir)
-│   └── camera        CameraActor    → hora, NTP, grabación, SD y codec (-ntpServer o flag de codec)
+│   ├── camera        CameraActor    → hora, NTP, grabación, SD y codec (-ntpServer o flag de codec)
+│   └── ignition      IgnitionActor  → apagado de la cámara por GPIO (solo con -cameraPowerGPIO)
 ├── listenner         ListenActor    → servidor HTTP que recibe los eventos de la cámara
 └── pubsub-actor-XXXX singleton MQTT (lo crea InitPubSub desde counting/Started)
 ```
@@ -669,6 +670,102 @@ Verificado de punta a punta contra el DS-2XM6825G0: perfil ya alineado → no es
 distinto → `statusCode 1`, en caliente, sin reinicio; `SmartCodec` distinto → `statusCode 7`,
 reinicio, cámara de vuelta en 2 min con el ajuste efectivo, y el ciclo siguiente idempotente.
 
+### Apagado de la cámara por GPIO (`-cameraPowerGPIO`)
+
+Deshabilitado salvo que se pase `-cameraPowerGPIO`: sin él no se crea el actor, no se
+escucha nada y el binario se comporta como antes de que esto existiera. Flags:
+`-cameraPowerOffLevel` (1), `-cameraPowerOffDelay` (20s), `-cameraBootDelay` (2m).
+
+**La señal viene de `go-ignition` por MQTT**, no por protoactor remote. Ese binario
+corre en el mismo gateway (`/usr/sbin/omvz7/ignition`) y publica en `EVENTS/ignition`:
+
+```json
+{"value":{"state":1},"timestamp":1793335980.405281,"type":"SUSPEND_EVT"}
+{"value":{"state":1},"timestamp":1793335980.401813,"type":"IgnitionEvent"}
+```
+
+Estados: `NA=0, UP=1, DOWN=2`. **Solo se actúa sobre `SUSPEND_EVT`.** Ese es el que
+`go-ignition` emite junto a su `PowerEvent` interno, o sea **después de su propio
+periodo de gracia** tras la llave: ya viene antirrebote. El `IgnitionEvent` es el estado
+crudo y solo se registra — actuar sobre él apagaría y encendería la cámara con cada
+golpe de llave, y cada encendido cuesta dos minutos sin contar a nadie.
+
+`go-fareCollection` resuelve lo mismo con protoactor remote (`DiscoverIgnition` →
+`IgnitionPowerSubscription` → `PowerEvent` tipado). **Acá se eligió MQTT a propósito**:
+este binario no usa remote, y habilitarlo serían un puerto TCP nuevo, serialización
+remota, un handshake con reintentos y un `ctx.Watch` sobre un PID remoto. `SubscribeFun`
+ya existe y `DoorsActor` ya hace exactamente esto. Lo que se paga es un contrato más
+flojo —JSON y un string mágico—, y por eso hay una prueba con el payload real capturado
+del gateway, igual que `g1_test.go` con el XML de la cámara.
+
+**Ojo con el `timestamp`**: en este JSON son **segundos con fracción**, mientras que el
+`PowerEvent` que el mismo binario manda por protoactor los lleva en **milisegundos
+enteros**. Mismo nombre, distinta unidad.
+
+**La GPIO se escribe a sysfs a mano.** `github.com/brian-armstrong/gpio` estaba en
+`go.mod` con un watcher de entradas que **nadie llamaba**; se quitó junto con la
+dependencia. No servía para esto: tiene **siete `os.Exit(1)`** ante cualquier fallo al
+abrir un archivo de sysfs, así que un pin mal escrito en la línea de comandos mataría el
+proceso de conteo entero —sin panic, sin log, y sin que la supervisión lo distinga de
+una salida limpia—. `SalidaGPIO` devuelve los errores, y hay una prueba que lo fija.
+
+La dirección se fija escribiendo **`low`/`high`, no `out`**: sysfs lo trata como "salida
+con este valor inicial" en una sola operación. Escribir `out` y después el valor deja la
+línea un instante en el nivel anterior, y ese parpadeo sobre un relé apagaría la cámara
+al arrancar el binario. El nivel de "encendida" **se deriva** como complemento de
+`-cameraPowerOffLevel`, para que no exista la combinación imposible de dos flags que se
+contradigan. Y después de escribir se **relee**: sysfs acepta la escritura y el valor
+puede no quedar, igual que pasa con el perfil de codificación de la cámara.
+
+Secuencia, con el plazo en medio a propósito:
+
+```
+SUSPEND_EVT DOWN → callar a ping, camera y video
+                 → esperar -cameraPowerOffDelay (que termine el clip en curso)
+                 → GPIO al nivel de apagado
+                 → publicar CAMERAPOWER status "poweroff"
+
+SUSPEND_EVT UP   → GPIO al nivel de encendido (inmediato)
+                 → esperar -cameraBootDelay (la cámara tarda ~2 min en arrancar)
+                 → rehabilitar ping, camera y video
+                 → publicar CAMERAPOWER status "poweron"
+```
+
+Primero se calla y después se corta: al revés, el plazo del clip serían también veinte
+segundos de keep-alive fallando contra una cámara que ya no está.
+
+**Apagar la cámara sin avisarle a los tres actores que le hablan haría que empiecen a
+mentir**, y es la parte que una implementación ingenua se saltea:
+
+| actor | qué haría sin la compuerta |
+|---|---|
+| `PingActor` | `CounterDisconnected` cada 300 s — el falso positivo que se arregló en 347c7ce |
+| `CameraActor` | fallos de `storage`, deriva y `encoder_rejected` cada media hora |
+| `VideoActor` | RTSP cortado a mitad de extracción |
+
+Los pendientes de video se **descartan** al apagar, por la misma razón que con
+`MsgClockStep`: ya no se pueden cumplir. Ahí la marca de tiempo dejaba de apuntar al
+tramo correcto; acá el tramo no va a existir, porque la cámara deja de grabar.
+
+**Los temporizadores se validan contra el estado al llegar.** Si el vehículo vuelve a
+encender dentro del plazo de corte, el `msgCortarAlimentacion` que ya estaba en camino
+**se descarta**: sin esa guarda le cortaría la energía a la cámara de un vehículo en
+servicio. Lo mismo al revés con el arranque. Hay una prueba por cada caso.
+
+**Y es idempotente**: `go-ignition` reemite el estado con cada evento de llave y al
+suscribirse. Sin esa guarda, cada repetición de un `UP` reiniciaría la espera de
+arranque y la cámara quedaría marcada como no disponible indefinidamente, contando cero
+con el vehículo en servicio.
+
+**Los acumulados de la cámara se reinician al perder energía, y no hace falta hacer
+nada**: `CountingActor` reancla `rawXmap[id]` después de toda la cadena if/else, incluso
+cuando descarta el paso, así que se pierde a lo sumo el **primer** cruce tras el arranque
+y el siguiente ya cuenta bien. Las reglas de conteo no se tocaron.
+
+Un valor mal escrito en cualquiera de los cuatro flags **detiene el arranque**, igual que
+`-videoCodec`: seguir sin control de energía dejaría la configuración diciendo una cosa y
+el equipo haciendo otra, y eso se descubre cuando la batería ya se gastó.
+
 ### Credenciales de cámara
 
 Van en la variable de entorno `HIKVISION_CREDENTIALS`, cifradas con AES-GCM y una llave embebida
@@ -759,6 +856,15 @@ Y del lado del repo:
   se acceden sin lock (correcto: siempre desde el hilo del actor).
 - `ListenActor` no cierra el servidor HTTP salvo por `ctx.Done()`; el `close(ch)` en
   `Listen` corre incluso en shutdown limpio y termina en `msgListenError` → panic → restart.
+- **`Publish` tiene una carrera con el actor de MQTT**, detectada con `go test -race` al
+  agregar el apagado por GPIO. `Publish` ([client/pubsub.go:93](client/pubsub.go#L93)) lee
+  `instance.ctx` desde el hilo de quien llama, mientras `pubsubActor.Receive`
+  ([client/pubsub.go:137](client/pubsub.go#L137)) reasigna `ps.ctx` **en cada mensaje**. Es
+  anterior a este trabajo y no se tocó: arreglarlo bien significa dejar de guardar el
+  contexto en el struct, y eso es el singleton que usa todo el binario. Mientras tanto
+  **ninguna prueba debe llamar a `Publish`**: además de la carrera, levanta el cliente de
+  MQTT e intenta conectarse a `127.0.0.1:1883`. `CountingActor.publicar` existe para
+  desviarlo en las pruebas.
 
 **Corregido en 1.0.30, vale saber que existió**: `CountingActor` pedía el GPS con
 `ctx.RequestFuture(ctx.Parent(), ...)` al manejar `*msgPingError`, pero es un actor de raíz y

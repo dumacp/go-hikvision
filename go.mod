@@ -6,7 +6,6 @@ require (
 	github.com/asynkron/protoactor-go v0.0.0-20230414121700-22ab527f4f7a
 	github.com/bluenviron/gortsplib/v5 v5.6.4
 	github.com/bluenviron/mediacommon/v2 v2.9.3
-	github.com/brian-armstrong/gpio v0.0.0-20181227042754-72b0058bbbcb
 	github.com/dumacp/go-actors v0.1.0
 	github.com/dumacp/go-doors v1.2.1
 	github.com/dumacp/go-logs v0.0.1

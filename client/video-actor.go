@@ -73,6 +73,10 @@ type VideoActor struct {
 	pending  []videoJob
 	working  bool
 	tickPend bool
+	// camaraEncendida es falso mientras go-ignition tenga el vehículo apagado y
+	// CountingActor le haya cortado la energía a la cámara. Sin -cameraPowerGPIO nadie
+	// manda MsgCameraPower nunca y queda siempre en true.
+	camaraEncendida bool
 	// clockWarned evita repetir el aviso de relojes desfasados en cada evento.
 	clockWarned bool
 	// sinEspacioAvisado evita repetir el aviso del disco lleno en cada evento. Con el
@@ -169,6 +173,8 @@ func NewVideoActor(cameras []string, user, pass, dir string, preRoll, duration t
 	}
 	a.camInfo = make(map[int32]camIdent)
 	a.lastEvent = make(map[int32]time.Time)
+	// Sin información de ignition se asume encendida; ver el campo.
+	a.camaraEncendida = true
 	// Un error acá no es motivo para deshabilitar nada: el campo queda vacío.
 	a.hostname, _ = os.Hostname()
 	a.Logger = &Logger{}
@@ -207,6 +213,25 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 			a.warnLog.Printf("reloj de la puerta %d saltó: %d recortes pendientes descartados, "+
 				"su marca de tiempo ya no apunta al mismo tramo grabado", msg.ID, descartados)
 		}
+
+	case *MsgCameraPower:
+		a.camaraEncendida = msg.On
+		if msg.On {
+			a.infoLog.Println("la camara volvio a tener alimentacion, se reanuda la extraccion")
+			a.next(ctx)
+			break
+		}
+		// Los pendientes se descartan por la misma razón que con MsgClockStep: ya no
+		// se pueden cumplir. Ahí la marca de tiempo dejaba de apuntar al tramo
+		// correcto; acá el tramo directamente no va a existir, porque la cámara deja de
+		// grabar al quedarse sin energía. Guardarlos solo serviría para que al volver
+		// se intenten todos contra una grabación que no está.
+		if n := len(a.pending); n > 0 {
+			a.warnLog.Printf("vehiculo apagado: %d recortes pendientes descartados, "+
+				"la camara no va a grabar esa ventana", n)
+			a.pending = a.pending[:0]
+		}
+		a.infoLog.Println("vehiculo apagado: no se extrae mas video hasta que vuelva la alimentacion")
 
 	case *msgVideoTick:
 		a.tickPend = false
@@ -322,6 +347,13 @@ func (a *VideoActor) enqueue(ctx actor.Context, msg *messages.Event) {
 		a.warnLog.Printf("sin -camera para la puerta %d, no se puede extraer video", msg.GetID())
 		return
 	}
+	if !a.camaraEncendida {
+		// Encolarlo no serviría: la cámara no está grabando, así que esa ventana no va
+		// a existir nunca. El conteo del paso sigue su camino normal; lo único que se
+		// pierde es su video.
+		a.buildLog.Printf("camara sin alimentacion, no se extrae el video de la puerta %d", msg.GetID())
+		return
+	}
 	if len(a.pending) >= a.maxQueue {
 		a.warnLog.Printf("cola de video llena (%d), se descarta el paso de la puerta %d en %s",
 			a.maxQueue, msg.GetID(), time.Unix(msg.GetTimestamp(), 0).Format(time.RFC3339))
@@ -371,7 +403,7 @@ func (a *VideoActor) enqueue(ctx actor.Context, msg *messages.Event) {
 // medido: la cámara ajusta el starttime al keyframe anterior, con lo que dos eventos del
 // mismo GOP devuelven bytes idénticos.
 func (a *VideoActor) next(ctx actor.Context) {
-	if a.working || len(a.pending) == 0 {
+	if a.working || len(a.pending) == 0 || !a.camaraEncendida {
 		return
 	}
 

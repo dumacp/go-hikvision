@@ -31,12 +31,13 @@ type CountingActor struct {
 	tamperingmap   map[int32]int64
 
 	// pubsub *actor.PID
-	doors  *actor.PID
-	events *actor.PID
-	ping   *actor.PID
-	gps    *actor.PID
-	video  *actor.PID
-	camera *actor.PID
+	doors    *actor.PID
+	events   *actor.PID
+	ping     *actor.PID
+	gps      *actor.PID
+	video    *actor.PID
+	camera   *actor.PID
+	ignition *actor.PID
 
 	// videoProps y cameraProps quedan nil si esas funciones no se configuraron.
 	videoProps  *actor.Props
@@ -48,6 +49,23 @@ type CountingActor struct {
 	// pingAddr se pasa a PingActor al crearlo. Vacío conserva la dirección
 	// histórica del keep-alive; ver PingActor.addr.
 	pingAddr string
+
+	// Apagado de la cámara por GPIO, comandado por go-ignition. La política vive en
+	// alimentacion-camara.go. Con alimentacion nil la función entera no existe y nada
+	// de esto se mira: es el caso de todos los equipos que no pasan -cameraPowerGPIO.
+	alimentacion   *SalidaGPIO
+	nivelApagado   int
+	esperaApagado  time.Duration
+	esperaArranque time.Duration
+	// camaraEncendida es el último estado aplicado a la GPIO. Arranca en true porque
+	// al arrancar el binario le damos energía a la cámara; ver SetCameraPower.
+	camaraEncendida bool
+	// programar desvía los temporizadores del apagado; nil usa time.AfterFunc. Solo lo
+	// rellenan las pruebas. Ver CountingActor.tras.
+	programar func(actor.Context, time.Duration, interface{})
+	// publicar desvía el evento de alimentación; nil usa Publish. Solo lo rellenan las
+	// pruebas, para verificar el JSON del contrato sin levantar el cliente de MQTT.
+	publicar func(topic string, data []byte)
 }
 
 // SetCameraProps habilita el mantenimiento de hora y NTP de las cámaras.
@@ -110,6 +128,10 @@ func NewCountingActor() *CountingActor {
 	count.puertas = make(map[uint]uint)
 	count.countCloseDoor = make(map[int]bool)
 	count.openState = make(map[int]uint)
+	// Sin información de go-ignition se asume la cámara encendida. Es la dirección
+	// segura: una cámara encendida de más gasta batería; una apagada de menos pierde
+	// pasajeros en silencio.
+	count.camaraEncendida = true
 	return count
 }
 
@@ -205,6 +227,27 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 				a.errLog.Panicln(err)
 			}
 			a.camera = pid7
+		}
+
+		// El actor de ignición solo tiene sentido si hay una GPIO que accionar: sin
+		// -cameraPowerGPIO nadie escucha el tópico y el binario se comporta igual que
+		// antes de existir esta función.
+		if a.alimentacion != nil {
+			ign := NewIgnitionActor()
+			ign.SetLogError(a.errLog).
+				SetLogWarn(a.warnLog).
+				SetLogInfo(a.infoLog).
+				SetLogBuild(a.buildLog)
+			if a.debug {
+				ign.WithDebug()
+			}
+			props8 := actor.PropsFromProducer(func() actor.Actor { return ign })
+			pid8, err := ctx.SpawnNamed(props8, "ignition")
+			if err != nil {
+				time.Sleep(3 * time.Second)
+				a.errLog.Panicln(err)
+			}
+			a.ignition = pid8
 		}
 
 	case *persistence.RequestSnapshot:
@@ -469,6 +512,14 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 	case *msgAddEvent:
 		a.buildLog.Printf("data: %q", msg)
 		Publish(topicAddEvents, msg.data)
+
+	// Apagado de la cámara comandado por go-ignition; ver alimentacion-camara.go.
+	case *MsgIgnition:
+		a.aplicarAlimentacion(ctx, msg)
+	case *msgCortarAlimentacion:
+		a.cortarAlimentacion()
+	case *msgCamaraLista:
+		a.camaraTerminoDeArrancar(ctx)
 	case *actor.Terminated:
 		a.warnLog.Printf("actor terminated: %s", msg.GetWho().GetAddress())
 	}

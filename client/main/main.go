@@ -51,6 +51,11 @@ var videoQuality int
 var videoBitrateMax int
 var encoderMinUptime time.Duration
 
+var cameraPowerGPIO int
+var cameraPowerOffLevel int
+var cameraPowerOffDelay time.Duration
+var cameraBootDelay time.Duration
+
 var isZeroOpenState zeroFlags
 var enableCountWithCloseDoor closeFlags
 var cameras cameraFlags
@@ -162,6 +167,24 @@ func init() {
 	flag.DurationVar(&encoderMinUptime, "encoderMinUptime", client.EncoderMinUptimeDefault,
 		"how long the binary must be up before touching the encoder profile; 0 applies it on "+
 			"the first cycle. It is the only brake against a camera reboot loop")
+
+	// Apagado de la camara comandado por go-ignition. Sin -cameraPowerGPIO no se crea
+	// el actor, no se escucha el topico y el binario se comporta como antes.
+	flag.IntVar(&cameraPowerGPIO, "cameraPowerGPIO", 0,
+		"sysfs GPIO line that controls the camera power; 0 disables the whole feature. "+
+			"When set, the binary listens to EVENTS/ignition and cuts power when the "+
+			"vehicle is switched off")
+	flag.IntVar(&cameraPowerOffLevel, "cameraPowerOffLevel", 1,
+		"level (0 or 1) that means POWER OFF on -cameraPowerGPIO; the complement means "+
+			"power on and is what the line is driven to at startup")
+	flag.DurationVar(&cameraPowerOffDelay, "cameraPowerOffDelay", 20*time.Second,
+		"how long to wait after the shutdown signal before cutting power, so the clip "+
+			"being extracted can finish. Extraction runs in real time, so a 16s clip "+
+			"takes 16s")
+	flag.DurationVar(&cameraBootDelay, "cameraBootDelay", 2*time.Minute,
+		"how long the camera takes to boot after power returns; measured at ~2min on the "+
+			"DS-2XM6825G0. Until it elapses the binary does not talk to the camera, to "+
+			"avoid reporting a fault that is just a boot")
 }
 
 func main() {
@@ -208,6 +231,21 @@ func main() {
 	}
 	if videoMinFreeMB < 0 {
 		log.Fatalf("-videoMinFree %d no puede ser negativo", videoMinFreeMB)
+	}
+	// Un valor mal escrito detiene el arranque, igual que -videoCodec y -smartCodec.
+	// Ignorarlo en silencio dejaria la camara sin control de energia mientras la
+	// configuracion dice lo contrario, y eso se descubre cuando la bateria ya se gasto.
+	if cameraPowerGPIO < 0 {
+		log.Fatalf("-cameraPowerGPIO %d no puede ser negativo", cameraPowerGPIO)
+	}
+	if cameraPowerOffLevel != 0 && cameraPowerOffLevel != 1 {
+		log.Fatalf("-cameraPowerOffLevel %d invalido, solo 0 o 1", cameraPowerOffLevel)
+	}
+	if cameraPowerOffDelay < 0 {
+		log.Fatalf("-cameraPowerOffDelay %v no puede ser negativo", cameraPowerOffDelay)
+	}
+	if cameraBootDelay < 0 {
+		log.Fatalf("-cameraBootDelay %v no puede ser negativo", cameraBootDelay)
 	}
 	videoMinFree := uint64(videoMinFreeMB) << 20
 
@@ -257,6 +295,27 @@ func main() {
 			counting.SetPingAddr(ip)
 			break
 		}
+	}
+	// Apagado de la cámara comandado por go-ignition. La línea se deja en el nivel de
+	// "encendida" en una sola operación de sysfs, así que al arrancar el binario la
+	// cámara no parpadea.
+	//
+	// Un fallo acá DETIENE el arranque, igual que un -videoCodec mal escrito. Seguir
+	// sin control de energía dejaría la configuración diciendo una cosa y el equipo
+	// haciendo otra, y eso se descubre cuando la batería ya se gastó.
+	if cameraPowerGPIO > 0 {
+		nivelEncendido := 1
+		if cameraPowerOffLevel == 1 {
+			nivelEncendido = 0
+		}
+		salida, err := client.NuevaSalidaGPIO(cameraPowerGPIO, nivelEncendido)
+		if err != nil {
+			log.Fatalf("-cameraPowerGPIO: %s", err)
+		}
+		counting.SetCameraPower(salida, cameraPowerOffLevel, cameraPowerOffDelay, cameraBootDelay)
+		infolog.Printf("apagado de camara por gpio %d habilitado: apagada=%d, encendida=%d, "+
+			"corte tras %v, arranque %v", cameraPowerGPIO, cameraPowerOffLevel, nivelEncendido,
+			cameraPowerOffDelay, cameraBootDelay)
 	}
 	applyDoorBool(isZeroOpenState, counting.SetZeroOpenState)
 	applyDoorBool(enableCountWithCloseDoor, counting.SetCountCloseDoor)

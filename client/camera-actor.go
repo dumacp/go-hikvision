@@ -130,6 +130,10 @@ type CameraActor struct {
 	cancel  func()
 	// startedAt fija el arranque, para el mínimo de encoderMinUptime.
 	startedAt time.Time
+	// camaraEncendida es falso mientras go-ignition tenga el vehículo apagado y
+	// CountingActor le haya cortado la energía a la cámara. Sin -cameraPowerGPIO nadie
+	// manda MsgCameraPower nunca y queda siempre en true.
+	camaraEncendida bool
 
 	// videoDir y videoMinFree describen el disco del gateway donde se dejan los clips,
 	// no el de la cámara. Se miden acá y no en VideoActor porque este es el actor que ya
@@ -252,6 +256,8 @@ func NewCameraActor(cameras []string, user, pass string, want CameraConfig, inte
 		state:        make(map[int32]*camTimeState),
 		videoDir:     videoDir,
 		videoMinFree: videoMinFree,
+		// Sin información de ignition se asume encendida; ver el campo.
+		camaraEncendida: true,
 	}
 	a.Logger = &Logger{}
 	return a
@@ -276,6 +282,14 @@ func (a *CameraActor) Receive(ctx actor.Context) {
 
 	case *msgCameraTick:
 		a.runCycle(ctx)
+
+	case *MsgCameraPower:
+		// Con la cámara sin energía todo el ciclo fallaría: la deriva no se puede
+		// medir, el almacenamiento no se puede leer y el perfil no se puede escribir.
+		// Dejarlo correr llenaría el log de errores y publicaría estados de avería por
+		// un apagado que pedimos nosotros.
+		a.camaraEncendida = msg.On
+		a.infoLog.Printf("mantenimiento de camara: encendida=%v", msg.On)
 
 	case *msgCameraResult:
 		a.handleResult(ctx, msg)
@@ -304,6 +318,12 @@ func (a *CameraActor) schedule(ctx actor.Context, d time.Duration) {
 // de Receive: una cámara que no responde bloquearía el actor durante el timeout.
 func (a *CameraActor) runCycle(ctx actor.Context) {
 	a.schedule(ctx, a.interval)
+	if !a.camaraEncendida {
+		// A propósito en buildLog y no en warnLog: con el vehículo apagado toda la
+		// noche esto sería un WARN cada media hora diciendo algo que ya sabemos.
+		a.buildLog.Println("camara sin alimentacion por ignition, se omite el ciclo")
+		return
+	}
 	if a.working {
 		a.warnLog.Println("el ciclo anterior todavía corre, se omite este")
 		return
