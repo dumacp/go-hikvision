@@ -126,6 +126,31 @@ func TestSalidaGPIOArgumentosInvalidos(t *testing.T) {
 	}
 }
 
+// TestSalidaGPIOPinYaExportadoNoEsError cubre un caso REAL del equipo: el script
+// /usr/sbin/omvz7/switch.sh exporta el gpio165 a mano y lo deja exportado. Si alguien
+// lo corre y después arranca el binario, el `echo 165 > export` falla con EBUSY. Eso no
+// es un error: lo que importa es que el directorio del pin exista y se pueda escribir.
+// Tratarlo como fallo dejaría al binario sin control de la cámara por un script que
+// alguien corrió antes.
+func TestSalidaGPIOPinYaExportadoNoEsError(t *testing.T) {
+	raiz := sysfsFalso(t, 165, 0)
+	// Un `export` de solo lectura hace fallar la escritura, como el EBUSY del kernel
+	// cuando el pin ya está tomado.
+	if err := os.Chmod(filepath.Join(raiz, "export"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	s, err := nuevaSalidaGPIOEn(raiz, 165, 0)
+	if err != nil {
+		t.Fatalf("con el pin ya exportado no debe fallar: %s", err)
+	}
+	if got := leerArchivo(t, raiz, "gpio165", "direction"); got != "low" {
+		t.Errorf("direction = %q, quiero \"low\"", got)
+	}
+	if err := s.Escribir(1); err != nil {
+		t.Errorf("y debe quedar usable: %s", err)
+	}
+}
+
 // TestSalidaGPIOPinInexistenteNoMataElProceso es la razón de no usar
 // github.com/brian-armstrong/gpio, que ya está en go.mod: esa librería llama a
 // os.Exit(1) ante este mismo caso. Si esta prueba pasa, es porque el proceso sigue vivo

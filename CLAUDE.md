@@ -709,6 +709,22 @@ abrir un archivo de sysfs, así que un pin mal escrito en la línea de comandos 
 proceso de conteo entero —sin panic, sin log, y sin que la supervisión lo distinga de
 una salida limpia—. `SalidaGPIO` devuelve los errores, y hay una prueba que lo fija.
 
+**El pin de la cámara es el `gpio165` y el nivel de apagado es `1`** (confirmado por
+Camilo). Eso coincide con `/usr/sbin/omvz7/switch.sh`, el script del propio equipo, que
+exporta ese pin y le escribe `1`: es un apagado manual de la cámara. Como
+`-cameraPowerOffLevel` ya trae `1` por defecto, en el lanzador alcanza con
+`-cameraPowerGPIO 165`.
+
+Dos cosas medidas en el equipo que explican el manejo del export:
+
+- **el pin arranca sin exportar** después de cada arranque del gateway, y la cámara está
+  encendida igual: el estado por defecto del hardware es "encendida", que es la dirección
+  segura;
+- **`switch.sh` lo deja exportado**, así que si alguien lo corrió antes, el
+  `echo 165 > export` del binario falla con EBUSY. Eso **no** es un error: lo que se
+  comprueba es que el directorio del pin exista y se pueda escribir. Tratarlo como fallo
+  dejaría al binario sin control de la cámara por un script que alguien corrió antes.
+
 La dirección se fija escribiendo **`low`/`high`, no `out`**: sysfs lo trata como "salida
 con este valor inicial" en una sola operación. Escribir `out` y después el valor deja la
 línea un instante en el nivel anterior, y ese parpadeo sobre un relé apagaría la cámara
