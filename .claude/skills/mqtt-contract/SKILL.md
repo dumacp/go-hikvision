@@ -203,6 +203,7 @@ cuando detecta que su reloj derivó:
 | `camera/doors` | `parseDoorsEvents` | estado de puerta (`api.DoorState` de `go-doors`) |
 | `GPS` | `parseGPSEvents` | trama NMEA cruda; solo se guarda si empieza con `$GPRMC` |
 | `EVENTS/ignition` | `parseIgnitionEvents` | estado del vehículo, de `go-ignition`; **solo con `-cameraPowerGPIO`** |
+| `cameracountdiscovery/params` | `parseDiscoveryResponse` | dónde está `nats-gwIot`; **salvo con `-disablePlatformConfig`** |
 
 Los dos formatos de puerta coexisten por compatibilidad: `EVENTS/doors` es el histórico,
 `camera/doors` es el que responde `go-doors` tras el `DoorsStateRequest` publicado en `DOORS`.
@@ -236,10 +237,41 @@ El `IgnitionEvent` es el estado crudo y solo se registra.
 `state: 0` (NA) se **descarta**: es "no sé", y tratarlo como apagado dejaría la cámara sin
 energía por un dato que el propio `go-ignition` declara desconocido.
 
+### `GWIOT/discovery` + `cameracountdiscovery/params` — dónde está nats-gwIot
+
+Es el único intercambio donde este binario **publica una pregunta y espera respuesta**. Sirve
+para encontrar al proceso `nats-gwIot`, que es quien baja la configuración de la plataforma
+(ver `docs/contrato/configuracion-plataforma.md`).
+
+```
+go-hikvision  --> GWIOT/discovery               {"reply":"cameracountdiscovery/params"}
+nats-gwIot    --> cameracountdiscovery/params   {"host":"127.0.0.1","port":8091}
+```
+
+Con ese `host:port` se activa un actor **remoto por protoactor** y se le pide un
+`WatchKeyValue` del bucket de parámetros. Los datos NO viajan por MQTT; por acá va solo el
+descubrimiento.
+
+**El tópico de respuesta es propio de este binario.** `go-driverconsole` usa
+`dconsolediscovery/params` y `go-counterpass` usa `counterpassdiscovery/params`. Si dos
+procesos comparten uno, cada uno recibe las respuestas del otro y termina hablándole al
+gateway equivocado.
+
+El descubrimiento se reintenta solo cada 60 s mientras no haya respuesta. Que falle no
+detiene nada: el binario cuenta igual con los flags, los defaults y el cache en disco.
+
 ## Notas de implementación
 
 - El actor MQTT es un **singleton** por `sync.Once` (`getInstance`), spawneado en la raíz con
   nombre aleatorio. `Publish` es una función libre que no requiere contexto de actor.
+- `Subscribe` es `SubscribeFun` con la firma que esperan los actores de descubrimiento de
+  `go-gwiot`: el parser devuelve el mensaje **o un error como valor**, no como segundo
+  retorno. Son dos convenciones que conviven en la flota; traducir en `pubsub.go` es más
+  barato que cambiarle la firma a los cuatro parsers que ya existen.
+- **Quien se suscriba fuera del paquete `client` tiene que llamar antes a `InitPubSub` con el
+  sistema de actores correcto.** `getInstance(nil)` monta el singleton sobre un
+  `actor.NewActorSystem()` propio si todavía no existe, y el binario queda con dos sistemas
+  de actores y un cliente de MQTT huérfano, sin un solo error.
 - `SubscribeFun` guarda la suscripción en el mapa **antes** de verificar conexión, así que las
   suscripciones se rehacen solas en `*actor.Started` tras un reinicio del actor.
 - Si `SubscribeFun` falla porque el broker no está listo, los actores hijos hacen

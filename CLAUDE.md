@@ -24,7 +24,18 @@ cd client/messages && ./protobuf.sh
 **Dependencias**: `go-doors` y `go-actors` se consumen por versión publicada (`v1.2.1` y
 `v0.1.0`); antes iban por `replace` al filesystem y ya no hace falta tenerlos clonados.
 
-**Queda UN `replace`, y es obligatorio**: `github.com/asynkron/protoactor-go => ../../asynkron/protoactor-go`.
+**Hay un `replace` TEMPORAL que hay que quitar**:
+`github.com/dumacp/go-params => ../go-params-cameracount`. Apunta a un git worktree con el
+commit que agrega `DEV_CAMERACOUNT_CONFIG` (rama `feat/cameracount-config`). En cuanto ese
+commit esté publicado, se reemplaza por la versión y **se borra el replace y el worktree**:
+
+```bash
+go mod edit -dropreplace=github.com/dumacp/go-params
+go get github.com/dumacp/go-params@<la-version-nueva>
+git -C ../go-params worktree remove ../go-params-cameracount
+```
+
+**Y queda otro `replace`, ese sí obligatorio**: `github.com/asynkron/protoactor-go => ../../asynkron/protoactor-go`.
 El checkout local lleva dos parches que no existen en ningún commit publicado, y uno de ellos
 **evita un panic en armv7**, que es la arquitectura de destino:
 
@@ -37,7 +48,13 @@ En ARM `int` es de 32 bits, así que un hash murmur32 mayor a 2³¹ se vuelve **
 convertirlo y `s.LocalPIDs[índice]` hace `index out of range`. Medido: **el 50% de los nombres**
 cae en índice negativo, incluidos `counting/video`, `counting/events`, `counting/doors` y
 `counting/ping`, que son los de este binario. En un equipo de 64 bits no se ve nunca. Upstream
-sigue sin arreglarlo (verificado contra la rama `dev`) y no hay issue abierto. El segundo parche
+sigue sin arreglarlo (verificado contra la rama `dev`) y no hay issue abierto. **Pero ya
+existe el fork publicado que CLAUDE.md venía pidiendo**: `github.com/dumacp/protoactor-go`
+lleva el parche (verificado en
+`v0.0.0-20261101194920-b85f35a0f362`, `actor/process_registry.go:45`) y `go-params` ya lo
+consume por `replace`. Migrar este repo a ese fork cambiaría el `replace` al filesystem por
+uno a una versión publicada; **no se hizo acá** porque no es parte de este trabajo y hay que
+verificarlo en el equipo, no solo compilarlo. El segundo parche
 —el `if err != nil` de `remote/proto_serializer.go`— **sí** lo adoptaron upstream y ya no haría
 falta con una versión nueva.
 
@@ -67,6 +84,8 @@ root
 │   ├── camera        CameraActor    → hora, NTP, grabación, SD y codec (-ntpServer o flag de codec)
 │   └── ignition      IgnitionActor  → apagado de la cámara por GPIO (solo con -cameraPowerGPIO)
 ├── listenner         ListenActor    → servidor HTTP que recibe los eventos de la cámara
+├── parametros        parametros.Actor → configuración de plataforma (salvo -disablePlatformConfig)
+│   └── params-actor  go-params      → y debajo params-data-actor y discover-actor
 └── pubsub-actor-XXXX singleton MQTT (lo crea InitPubSub desde counting/Started)
 ```
 
@@ -847,6 +866,122 @@ y el siguiente ya cuenta bien. Las reglas de conteo no se tocaron.
 Un valor mal escrito en cualquiera de los cuatro flags **detiene el arranque**, igual que
 `-videoCodec`: seguir sin control de energía dejaría la configuración diciendo una cosa y
 el equipo haciendo otra, y eso se descubre cuando la batería ya se gastó.
+
+### Configuración desde la plataforma (`DEV_CAMERACOUNT_CONFIG`)
+
+Los parámetros que más se tocan —IP y puerta de cada cámara, la polaridad de cada puerta,
+NTP, perfil de codificación, interruptor del video y GPIO de apagado— se pueden configurar
+desde la plataforma sin entrar por SSH a editar `/etc/init.d/backdoor`. El contrato completo
+—esquema del JSON, qué pasa ante cada fallo, cómo viaja— está en
+[docs/contrato/configuracion-plataforma.md](docs/contrato/configuracion-plataforma.md).
+Acá va lo que hace falta para tocar el código.
+
+**La prioridad es la INVERSA de la del resto de la flota, y es una decisión, no un descuido:**
+
+```
+1. flag pasado explícitamente en la línea de comandos  -> gana siempre
+2. DEV_CAMERACOUNT_CONFIG                              -> solo rellena lo que el flag no fijó
+3. default compilado
+```
+
+En `go-driverconsole` y `go-counterpass` la plataforma pisa el flag sin preguntar, porque su
+merge compara contra el **valor actual de la variable** y no sabe de dónde salió — no hay un
+solo `flag.Visit` en ninguno de los dos. Acá sí se sabe: `flagsPasados()` recorre únicamente
+los flags realmente escritos. **No se puede deducir del valor**: `-videoFrameRate 0` y no
+pasar el flag dejan exactamente la misma variable, y esa confusión es la que rompe el merge
+de los otros binarios.
+
+**La consecuencia operativa hay que decirla**: el lanzador de hoy pasa casi todos estos
+flags, así que la plataforma no mueve nada hasta que se los quite. Por eso el banner de
+arranque y cada aplicación registran, parámetro por parámetro, de dónde salió el valor
+(`Efectiva.Describir`).
+
+**Todos los campos escalares del JSON son punteros**, y eso tampoco es estilo. Un `bool`
+ausente se deserializa como `false` y un `int` como `0`; sin punteros no hay forma de
+distinguir "la plataforma no mandó el campo" de "mandó false". Medido en los binarios de
+referencia: un objeto que **omite** un booleano lo apaga igual, pisando el flag con el que se
+arrancó el equipo, y encima dispara un reinicio de actores.
+
+**`cameras` reemplaza la lista entera, no es un parche.** Mandar una sola cámara deja la otra
+puerta sin cámara. Es lo que hace falta para poder quitar una, pero usarlo mal no da ningún
+error: se ve como una serie de conteo que se congela.
+
+**La puerta y sus dos switches van dentro de cada cámara.** En la línea de comandos son tres
+flags repetibles que hay que mantener alineados por posición, y desalinearlos descarta los
+cruces de una puerta durante un turno entero sin un solo error. En el JSON eso no se puede
+escribir mal.
+
+#### Se aplica en caliente, y el conteo no se toca
+
+`CountingActor` recibe `MsgAplicarConfig` y reconstruye **solo** los hijos que el cambio
+afecta (`Efectiva.Diff` agrupa por actor, no por campo). Los acumulados, la boltdb y la
+persistencia viven en `CountingActor`, que no se reinicia: un cambio de `videoFrameRate` no
+puede costar un contador.
+
+Por eso `SetVideoProps`/`SetCameraProps` dejaron de existir y hoy son **fábricas**
+(`SetVideoFactory`, `SetCameraFactory`): unas `Props` armadas en main dejan la configuración
+congelada y reconstruir el actor con otros valores exigiría reiniciar el proceso. Una fábrica
+que devuelve `nil` significa "este hijo no va", que es como se apaga el video o el
+mantenimiento de cámara — el mismo camino que ya existía cuando faltaba `-videoDir`.
+
+Tres cosas del respawn que no son obvias:
+
+- `PoisonFuture().Wait()` **bloquea el hilo de `CountingActor`** hasta que el hijo termine.
+  Los eventos que lleguen mientras tanto esperan en el buzón, no se pierden.
+- **un hijo recién creado nace creyendo que la cámara está encendida**; si estaba apagada por
+  ignición hay que mandarle `MsgCameraPower{On:false}`, o se pone a hablarle a una cámara sin
+  energía y a reportar averías que no existen;
+- un fallo del respawn **no entra en pánico**. `CountingActor` es el actor de persistencia:
+  reiniciarlo replica la boltdb y republica acumulados recalculados, que es un precio
+  desproporcionado por no haber podido reconstruir un accesorio.
+
+**`ListenActor.cameras` quedó detrás de un `sync.RWMutex`.** Lo lee la goroutine del servidor
+HTTP, una vez por evento en `doorID`, y ahora lo escribe `Receive`. Sin el candado es una
+carrera sobre el dato que decide a qué puerta va cada pasajero.
+
+**Un cambio de GPIO deja primero la línea vieja en el nivel de "encendida"** y recién después
+toma la nueva. Al revés quedaría una línea abandonada manejando el nivel de apagado, y con el
+relé conectado eso es una cámara que no vuelve nunca.
+
+#### Qué se rompe si falla, y qué no
+
+Nada de esto detiene el conteo. Sin broker, sin `nats-gwIot` o sin sesión con la plataforma,
+el binario cuenta con los flags, los defaults y el cache. Hay **una** excepción deliberada en
+la otra dirección: si `cameraPowerGPIO` viene de un **flag** y no se puede tomar la línea, el
+binario se detiene —quien lo lanzó escribió algo que el equipo no puede hacer—; si viene de la
+**plataforma**, se deshabilita solo el apagado y se sigue contando. Detenerse ahí dejaría a
+toda la flota sin arrancar, en bucle de supervisión, y sin forma de corregirlo desde el
+lanzador.
+
+#### El cache en disco es propio, porque el de `go-params` no funciona
+
+`go-params` **escribe** el mapa plano crudo en boltdb y lo **lee** como un
+`messages.ConfigParam` —otro esquema—, con lo que recupera un struct vacío; y el valor leído
+nunca se propaga al padre (la única rama que lo haría responde a un mensaje que nadie envía).
+Un arranque sin red queda sin configuración aunque el archivo esté ahí.
+
+Acá la persistencia de `go-params` se deshabilita y se guarda el JSON crudo en
+`-platformConfigCache` (`/SD/boltdbs/cameracount-config.json`), como `.part` + rename, que es
+atómico. **Hace falta de verdad**: con los flags quitados del lanzador, un arranque sin red
+dejaría el conteo con el default de `zeroOpenState`, que descarta **todos** los cruces en un
+vehículo cableado al revés.
+
+#### El descubrimiento está reimplementado a propósito
+
+`go-gwiot/pkg/gwiot.NewDiscoveryActor` son cuarenta líneas, pero vive en el mismo paquete Go
+que el cliente completo de NATS: importarlo enlaza `nats.go`, `go-oidc`, `oauth2` y
+`keycloak` dentro de un binario que **nunca abre una conexión a NATS** —de eso se encarga
+`nats-gwIot`, que corre aparte y tiene las credenciales—. `client/parametros/discovery.go`
+copia el actor e importa solo `pkg/gwiotmsg` (protobuf puro) y `pkg/gwiotmsg/gwiot` (dos
+constantes), así que el protocolo sigue siendo el mismo y compartido.
+
+Lo que **no** se pudo evitar es **gRPC**: protoactor `remote` lo arrastra entero. Medido en
+armv7: **20.0 MB → 25.8 MB, +5.8 MB (+29%)**. Es el precio de la función, y conviene saberlo
+antes de agregarle otra.
+
+**`DEV_CAMERACOUNT_CONFIG` exige un cambio en `go-params`.** Su parseo recorre el mapa con un
+`switch k` cuya rama `default` está vacía: **una clave que no esté listada ahí se descarta en
+silencio, sin log**. Publicar el atributo del lado de la plataforma no alcanza.
 
 ### Credenciales de cámara
 

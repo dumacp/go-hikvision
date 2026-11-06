@@ -1,14 +1,16 @@
 # Contrato con la plataforma
 
-Qué publica el conteo de pasajeros por MQTT y qué deja en el repositorio de clips. Es la
-documentación de las dos fronteras que cruza el dato: **los eventos** que consume la
-plataforma y **los archivos** que quedan en el bucket.
+Qué publica el conteo de pasajeros por MQTT, qué deja en el repositorio de clips y con qué
+se lo configura desde la plataforma. Es la documentación de las fronteras que cruza el dato:
+**los eventos** que consume la plataforma, **los archivos** que quedan en el bucket y **la
+configuración** que baja hacia el vehículo.
 
 | | |
 |---|---|
 | [eventos-mqtt.md](eventos-mqtt.md) | todos los mensajes, cuáles son nuevos y a cuáles se les agregaron campos |
 | [repositorio-clips.md](repositorio-clips.md) | la ruta en el bucket, los archivos y el contenido del JSON |
 | [correlacion.md](correlacion.md) | **cómo se identifica un clip** desde un evento y desde el JSON |
+| [configuracion-plataforma.md](configuracion-plataforma.md) | el atributo `DEV_CAMERACOUNT_CONFIG`: qué se puede configurar en remoto y qué gana cuando también hay un flag |
 
 Si vas a implementar del lado de la plataforma y solo podés leer uno, leé
 [correlacion.md](correlacion.md): ahí está la trampa que hace perder tiempo.
