@@ -39,9 +39,20 @@ type CountingActor struct {
 	camera   *actor.PID
 	ignition *actor.PID
 
-	// videoProps y cameraProps quedan nil si esas funciones no se configuraron.
-	videoProps  *actor.Props
-	cameraProps *actor.Props
+	// videoFactory y cameraFactory arman las Props de esos hijos a partir de la
+	// configuración vigente. Son fábricas y no Props fijas porque la configuración puede
+	// cambiar en caliente: unas Props armadas en main dejan los valores congelados y
+	// reconstruir el actor con otros exigiría reiniciar el proceso. Devuelven nil cuando
+	// ese trabajo no se puede hacer, y entonces el hijo no existe.
+	videoFactory  func(Efectiva) *actor.Props
+	cameraFactory func(Efectiva) *actor.Props
+
+	// cfg es la configuración aplicada: flags, defaults y lo que haya mandado la
+	// plataforma, ya resuelto. fijados dice qué flags se pasaron explícitamente, que es lo
+	// que le gana a la plataforma. Ver configuracion.go.
+	cfg     Efectiva
+	fijados map[string]bool
+	listen  *actor.PID
 
 	// withoutEventID se pasa a EventActor al crearlo. Compuerta temporal de
 	// compatibilidad con la plataforma; ver EventActor.withoutEventID.
@@ -68,11 +79,6 @@ type CountingActor struct {
 	publicar func(topic string, data []byte)
 }
 
-// SetCameraProps habilita el mantenimiento de hora y NTP de las cámaras.
-func (a *CountingActor) SetCameraProps(props *actor.Props) {
-	a.cameraProps = props
-}
-
 // newUID genera el identificador de un paso contado. Ocho hexadecimales alcanzan: la
 // unicidad real viene de la combinación de host, timestamp, puerta y tipo, y esto
 // resuelve el único caso ambiguo, dos pasos del mismo tipo en el mismo segundo.
@@ -95,11 +101,6 @@ func (a *CountingActor) sendCounted(ctx actor.Context, ev *messages.Event) {
 	if a.video != nil {
 		ctx.Send(a.video, ev)
 	}
-}
-
-// SetVideoProps habilita la extracción de video con el actor descrito por props.
-func (a *CountingActor) SetVideoProps(props *actor.Props) {
-	a.videoProps = props
 }
 
 const (
@@ -211,8 +212,12 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		}
 		a.gps = pid5
 
-		if a.videoProps != nil {
-			pid6, err := ctx.SpawnNamed(a.videoProps, "video")
+		// video y camera se arman desde la configuración vigente, igual que cuando llega
+		// una configuración nueva de la plataforma: un solo camino para crearlos, que es
+		// el que se ejercita siempre. Props nil significa que ese trabajo no se puede
+		// hacer —sin directorio, sin cámaras o sin credenciales— y el hijo no existe.
+		if props := a.propsVideo(); props != nil {
+			pid6, err := ctx.SpawnNamed(props, "video")
 			if err != nil {
 				time.Sleep(3 * time.Second)
 				a.errLog.Panicln(err)
@@ -220,8 +225,8 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 			a.video = pid6
 		}
 
-		if a.cameraProps != nil {
-			pid7, err := ctx.SpawnNamed(a.cameraProps, "camera")
+		if props := a.propsCamera(); props != nil {
+			pid7, err := ctx.SpawnNamed(props, "camera")
 			if err != nil {
 				time.Sleep(3 * time.Second)
 				a.errLog.Panicln(err)
@@ -232,23 +237,7 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		// El actor de ignición solo tiene sentido si hay una GPIO que accionar: sin
 		// -cameraPowerGPIO nadie escucha el tópico y el binario se comporta igual que
 		// antes de existir esta función.
-		if a.alimentacion != nil {
-			ign := NewIgnitionActor()
-			ign.SetLogError(a.errLog).
-				SetLogWarn(a.warnLog).
-				SetLogInfo(a.infoLog).
-				SetLogBuild(a.buildLog)
-			if a.debug {
-				ign.WithDebug()
-			}
-			props8 := actor.PropsFromProducer(func() actor.Actor { return ign })
-			pid8, err := ctx.SpawnNamed(props8, "ignition")
-			if err != nil {
-				time.Sleep(3 * time.Second)
-				a.errLog.Panicln(err)
-			}
-			a.ignition = pid8
-		}
+		a.asegurarIgnition(ctx)
 
 	case *persistence.RequestSnapshot:
 		a.buildLog.Printf("snapshot internal state: inputs -> '%v', outputs -> '%v', rawInputs -> %v, rawOutpts -> %v, allInputs -> %v, allOutpts -> %v\n",
@@ -520,6 +509,10 @@ func (a *CountingActor) Receive(ctx actor.Context) {
 		a.cortarAlimentacion()
 	case *msgCamaraLista:
 		a.camaraTerminoDeArrancar(ctx)
+	case *MsgRegistrarListen:
+		a.listen = msg.PID
+	case *MsgAplicarConfig:
+		a.aplicarConfig(ctx, msg.Cfg)
 	case *actor.Terminated:
 		a.warnLog.Printf("actor terminated: %s", msg.GetWho().GetAddress())
 	}

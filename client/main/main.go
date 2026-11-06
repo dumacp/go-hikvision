@@ -13,6 +13,7 @@ import (
 	"github.com/asynkron/protoactor-go/persistence"
 	"github.com/dumacp/go-hikvision/client"
 	"github.com/dumacp/go-hikvision/client/messages"
+	"github.com/dumacp/go-hikvision/client/parametros"
 	"golang.org/x/exp/errors/fmt"
 )
 
@@ -59,12 +60,30 @@ var gpioRegisters int
 var cameraPowerOffDelay time.Duration
 var cameraBootDelay time.Duration
 
+var deviceID string
+var videoEnabled bool
+var platformConfigCache string
+var disablePlatformConfig bool
+
 var isZeroOpenState zeroFlags
 var enableCountWithCloseDoor closeFlags
 var cameras cameraFlags
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "debug enable")
+	// Configuracion bajada de la plataforma (DEV_CAMERACOUNT_CONFIG). Ver
+	// client/parametros y client/configuracion.go.
+	flag.StringVar(&deviceID, "id", "",
+		"device id; it is the key of the platform parameter map. Empty uses the gateway hostname")
+	flag.StringVar(&platformConfigCache, "platformConfigCache", "/SD/boltdbs/cameracount-config.json",
+		"file where the last good platform configuration is cached, so a boot without "+
+			"network keeps it. Empty disables the cache")
+	flag.BoolVar(&disablePlatformConfig, "disablePlatformConfig", false,
+		"do not download configuration from the platform; the binary behaves exactly as "+
+			"before this feature existed")
+	flag.BoolVar(&videoEnabled, "videoEnabled", true,
+		"enable the video clip extraction. It still needs -videoDir, -camera and credentials; "+
+			"this switch is what the platform can turn off remotely")
 	// Compuerta de compatibilidad, temporal y a propósito: la plataforma todavía no
 	// procesa los mensajes que traen event_id, y sin este flag no hay forma de probar
 	// el resto del binario en un vehículo real sin romperle el conteo a la plataforma.
@@ -291,7 +310,8 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	rootContext := actor.NewActorSystem().Root
+	sistema := actor.NewActorSystem()
+	rootContext := sistema.Root
 
 	if len(isZeroOpenState) <= 0 {
 		isZeroOpenState = []bool{false}
@@ -300,55 +320,47 @@ func main() {
 		enableCountWithCloseDoor = []bool{false}
 	}
 
-	fmt.Printf("zeroOpenState: %s\n", describeDoorBool(isZeroOpenState))
-	fmt.Printf("countWithCloseDoor: %s\n", describeDoorBool(enableCountWithCloseDoor))
-	if len(camerasByDoor) > 0 {
-		fmt.Printf("cameras: %s\n", describeCameras(camerasByDoor))
-	} else {
-		fmt.Printf("cameras: not configured, using the legacy rule (%s -> door 1, rest -> door 0)\n",
+	if len(camerasByDoor) == 0 {
+		infolog.Printf("cameras: not configured, using the legacy rule (%s -> door 1, rest -> door 0)",
 			client.LegacyBackDoorIP())
 	}
 
-	counting := client.NewCountingActor()
-	// El keep-alive consulta la primera cámara configurada. Sin -camera queda la
-	// dirección histórica, para no alterar los equipos ya desplegados: ahí el
-	// comportamiento es exactamente el de siempre.
-	for _, ip := range camerasByDoor {
-		if ip != "" {
-			counting.SetPingAddr(ip)
-			break
-		}
-	}
-	// Apagado de la cámara comandado por go-ignition. La línea se deja en el nivel de
-	// "encendida" en una sola operación de sysfs, así que al arrancar el binario la
-	// cámara no parpadea.
-	//
-	// Un fallo acá DETIENE el arranque, igual que un -videoCodec mal escrito. Seguir
-	// sin control de energía dejaría la configuración diciendo una cosa y el equipo
-	// haciendo otra, y eso se descubre cuando la batería ya se gastó.
-	if cameraPowerGPIO > 0 {
-		nivelEncendido := 1
-		if cameraPowerOffLevel == 1 {
-			nivelEncendido = 0
-		}
-		salida, err := client.NuevaSalidaGPIO(cameraPowerGPIO, nivelEncendido)
-		switch {
-		case errors.Is(err, client.ErrNivelNoVerificado):
-			// La línea se maneja pero lee distinto de lo que se le pidió. Es lo que
-			// pasa con el pad todavía sin cablear, así que NO detiene el arranque: el
-			// conteo de pasajeros no se negocia por el cableado de un accesorio.
-			warnlog.Printf("-cameraPowerGPIO: %s; se continúa, pero hasta confirmarlo "+
-				"con el relé conectado no se puede dar por hecho que la cámara se apague", err)
+	// Prioridad de las fuentes, deliberadamente la INVERSA de la del resto de la flota:
+	// el flag pasado explícitamente le gana a la plataforma, que solo rellena lo que el
+	// flag no fijó. Ver client.Resolver y flagsPasados().
+	fijados := flagsPasados()
+	base := configuracionBase(camerasByDoor)
+
+	// El cache en disco se lee ANTES de arrancar los actores. La plataforma tarda ~10 s
+	// en llegar y puede no llegar nunca; sin esto, un arranque sin red deja el equipo con
+	// los defaults, y el default de zeroOpenState descarta TODOS los cruces en un
+	// vehículo cableado al revés.
+	cfgInicial := base
+	if !disablePlatformConfig {
+		switch cached, err := parametros.LeerCache(platformConfigCache); {
 		case err != nil:
-			log.Fatalf("-cameraPowerGPIO: %s", err)
+			warnlog.Printf("config: el cache %q no se pudo usar: %s", platformConfigCache, err)
+		case cached != nil:
+			cfgInicial = client.Resolver(base, cached, fijados)
+			infolog.Printf("config: cache de plataforma aplicado (guardado %s)",
+				parametros.Marca(platformConfigCache))
+		default:
+			infolog.Printf("config: todavía no hay cache de plataforma en %q", platformConfigCache)
 		}
-		counting.SetCameraPower(salida, cameraPowerOffLevel, cameraPowerOffDelay, cameraBootDelay)
-		infolog.Printf("apagado de camara por gpio %d habilitado: apagada=%d, encendida=%d, "+
-			"corte tras %v, arranque %v", cameraPowerGPIO, cameraPowerOffLevel, nivelEncendido,
-			cameraPowerOffDelay, cameraBootDelay)
 	}
-	applyDoorBool(isZeroOpenState, counting.SetZeroOpenState)
-	applyDoorBool(enableCountWithCloseDoor, counting.SetCountCloseDoor)
+
+	counting := client.NewCountingActor()
+	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).
+		SetLogBuild(buildlog)
+	if debug {
+		counting.WithDebug()
+	}
+	// SetConfig fija la configuración inicial y de paso el gating de cada puerta y la
+	// dirección del keep-alive. El keep-alive consulta la primera cámara configurada; sin
+	// cámaras queda la dirección histórica, para no alterar los equipos ya desplegados.
+	counting.SetConfig(cfgInicial, fijados)
+	counting.SetVideoFactory(videoFactory(camUser, camPass, videoMinFree))
+	counting.SetCameraFactory(cameraFactory(camUser, camPass, videoMinFree))
 	counting.SetWithoutEventID(withoutEventID)
 	// Se avisa en WARN y no en INFO porque es una regresión deliberada del formato: el
 	// paso se publica sin la llave que lo une con su video, y quien lea el log meses
@@ -358,107 +370,56 @@ func main() {
 			"a 1.0.32. La plataforma no va a poder cruzar el paso con su video. " +
 			"Quitá el flag cuando la plataforma acepte el campo")
 	}
-	counting.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).
-		SetLogBuild(buildlog)
-	if debug {
-		counting.WithDebug()
-	}
 
-	// La extracción de video necesita las tres cosas: dónde guardar, a qué cámara
-	// preguntarle y con qué credenciales. Si falta alguna, queda deshabilitada y el
-	// conteo sigue igual.
-	switch {
-	case len(videoDir) == 0:
-		infolog.Println("video extraction disabled (-videoDir not set)")
-	case len(camerasByDoor) == 0:
-		warnlog.Println("video extraction disabled: -videoDir is set but there is no -camera")
-	case len(camUser) == 0:
-		warnlog.Printf("video extraction disabled: -videoDir is set but %s is not usable", envCredentials)
-	default:
-		vid := client.NewVideoActor(camerasByDoor, camUser, camPass, videoDir,
-			videoPreRoll, videoDuration, videoQueue, videoMinFree)
-		vid.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
-		if debug {
-			vid.WithDebug()
-		}
-		counting.SetVideoProps(actor.PropsFromProducer(func() actor.Actor { return vid }))
-		infolog.Printf("video extraction enabled: dir=%q preRoll=%v duration=%v queue=%d minFree=%d MB",
-			videoDir, videoPreRoll, videoDuration, videoQueue, videoMinFree>>20)
-		// Vale avisarlo fuerte: sin piso, la extracción llena la partición hasta el final,
-		// y ahí vive la boltdb del conteo. Se pierde el acumulado del vehículo, que es
-		// mucho más caro que perder unos clips.
-		if videoMinFree == 0 {
-			warnlog.Printf("-videoMinFree 0: SIN piso de disco. La extracción va a llenar %q "+
-				"hasta el último byte, y en esa partición está la base del conteo", videoDir)
-		}
-	}
-
-	// El actor de cámara se crea si se pide CUALQUIERA de sus trabajos: el mantenimiento de
-	// hora (-ntpServer) o el perfil de codificación. Antes solo lo creaba -ntpServer, así que
-	// un -videoCodec o un -smartCodec sin él quedaban ignorados en silencio, con la única
-	// pista de un "camera time maintenance disabled" que hablaba de otra cosa.
+	// Apagado de la cámara comandado por go-ignition. La línea se deja en el nivel de
+	// "encendida" en una sola operación de sysfs, así que al arrancar el binario la
+	// cámara no parpadea.
 	//
-	// Adentro cada bloque se autolimita: sin -ntpServer no se toca el reloj ni los servidores
-	// NTP, aunque la deriva se sigue midiendo para el reporte. El horario de grabación sí se
-	// alinea en los dos casos, porque sin grabación no hay video que extraer y quien configura
-	// el codec está justamente haciendo video.
-	pideEncoder := len(smartCodec) > 0 || len(videoCodec) > 0 ||
-		videoFrameRate > 0 || videoGop > 0 || videoQuality > 0 || videoBitrateMax > 0
-	switch {
-	case len(ntpServer) == 0 && !pideEncoder:
-		infolog.Println("camera maintenance disabled (neither -ntpServer nor an encoder flag set)")
-	case len(camerasByDoor) == 0:
-		warnlog.Println("camera maintenance disabled: there is no -camera")
-	case len(camUser) == 0:
-		warnlog.Printf("camera maintenance disabled: %s is not usable", envCredentials)
-	default:
-		cam := client.NewCameraActor(camerasByDoor, camUser, camPass, client.CameraConfig{
-			Server:           ntpServer,
-			Port:             ntpPort,
-			Interval:         ntpInterval,
-			TimeZone:         ntpTimeZone,
-			DriftMax:         ntpDriftMax,
-			RecordStart:      recordStart,
-			RecordEnd:        recordEnd,
-			SmartCodec:       smartCodec,
-			FrameRate:        videoFrameRate,
-			GopFrames:        videoGop,
-			VideoCodec:       videoCodec,
-			Quality:          videoQuality,
-			BitrateMax:       videoBitrateMax,
-			EncoderMinUptime: encoderMinUptime,
-		}, cameraCheckInterval, videoDir, videoMinFree)
-		cam.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
-		if debug {
-			cam.WithDebug()
+	// Un fallo acá DETIENE el arranque, igual que un -videoCodec mal escrito. Seguir
+	// sin control de energía dejaría la configuración diciendo una cosa y el equipo
+	// haciendo otra, y eso se descubre cuando la batería ya se gastó.
+	if cfgInicial.CameraPowerGPIO > 0 {
+		nivelEncendido := 1
+		if cfgInicial.CameraPowerOffLevel == 1 {
+			nivelEncendido = 0
 		}
-		counting.SetCameraProps(actor.PropsFromProducer(func() actor.Actor { return cam }))
-		if len(ntpServer) > 0 {
-			infolog.Printf("camera time maintenance enabled: ntp=%s:%d every %v, zone=%q, driftMax=%v, check=%v, recording %s-%s",
-				ntpServer, ntpPort, ntpInterval, ntpTimeZone, ntpDriftMax, cameraCheckInterval,
-				recordStart, recordEnd)
-		} else {
-			infolog.Printf("camera maintenance enabled without NTP: no se toca el reloj; "+
-				"check=%v, recording %s-%s", cameraCheckInterval, recordStart, recordEnd)
+		salida, err := client.NuevaSalidaGPIO(cfgInicial.CameraPowerGPIO, nivelEncendido)
+		switch {
+		case errors.Is(err, client.ErrNivelNoVerificado):
+			// La línea se maneja pero lee distinto de lo que se le pidió. Es lo que
+			// pasa con el pad todavía sin cablear, así que NO detiene el arranque: el
+			// conteo de pasajeros no se negocia por el cableado de un accesorio.
+			warnlog.Printf("cameraPowerGPIO: %s; se continúa, pero hasta confirmarlo "+
+				"con el relé conectado no se puede dar por hecho que la cámara se apague", err)
+		case err != nil && fijados[client.FlagCameraPowerGPIO]:
+			// El número lo escribió quien lanzó el binario: detenerse es correcto, porque
+			// la configuración dice una cosa y el equipo hace otra, y eso se descubre
+			// cuando la batería ya se gastó.
+			log.Fatalf("-cameraPowerGPIO: %s", err)
+		case err != nil:
+			// El número vino de la PLATAFORMA (o del cache). Acá detenerse sería mucho
+			// peor: un valor mal cargado dejaría a toda la flota sin arrancar, en bucle
+			// de supervisión, y no se podría corregir desde el lanzador —habría que
+			// entrar a cada equipo a borrar el cache—. Se deshabilita solo el apagado y
+			// se cuenta igual, que es lo que no se negocia.
+			errlog.Printf("cameraPowerGPIO %d (de plataforma): %s; se deshabilita el "+
+				"apagado de la cámara y el conteo sigue", cfgInicial.CameraPowerGPIO, err)
+			salida = nil
 		}
-		// El perfil del encoder se anuncia aparte porque es el único que puede terminar en
-		// un reinicio de la cámara, y conviene verlo en el log de arranque.
-		if pideEncoder {
-			infolog.Printf("encoder profile: codec=%q smartCodec=%q fps=%d gop=%d quality=%d "+
-				"bitrateMax=%d; se aplica a los %v de encendido, y reinicia la cámara si el "+
-				"cambio lo exige",
-				videoCodec, smartCodec, videoFrameRate, videoGop, videoQuality, videoBitrateMax,
-				encoderMinUptime)
-			// El aviso no es formal: bajar este mínimo es exactamente lo que permite que un
-			// binario en bucle de supervisión reinicie cámaras una y otra vez.
-			if encoderMinUptime < 5*time.Minute {
-				warnlog.Printf("-encoderMinUptime en %v: si el binario entra en bucle de "+
-					"reinicios va a alcanzar ese umbral en cada vuelta y puede reiniciar la "+
-					"cámara repetidas veces. El default de %v existe para evitarlo",
-					encoderMinUptime, client.EncoderMinUptimeDefault)
-			}
+		if salida != nil {
+			counting.SetCameraPower(salida, cfgInicial.CameraPowerOffLevel,
+				cameraPowerOffDelay, cameraBootDelay)
+			infolog.Printf("apagado de camara por gpio %d habilitado: apagada=%d, encendida=%d, "+
+				"corte tras %v, arranque %v", cfgInicial.CameraPowerGPIO,
+				cfgInicial.CameraPowerOffLevel, nivelEncendido, cameraPowerOffDelay, cameraBootDelay)
 		}
 	}
+
+	// El banner dice, parámetro por parámetro, de dónde salió el valor. No es cosmético:
+	// con la prioridad invertida, un flag en el lanzador deja ese parámetro fuera del
+	// alcance de la plataforma, y sin esta línea eso se descubre recién cuando alguien lo
+	// cambia desde la plataforma y el equipo no le hace caso.
+	infolog.Printf("configuración efectiva al arrancar:\n%s", cfgInicial.Describir(fijados))
 
 	propsCounting := actor.PropsFromProducer(func() actor.Actor { return counting }, actor.WithReceiverMiddleware(persistence.Using(provider)))
 	pidCounting, err := rootContext.SpawnNamed(propsCounting, "counting")
@@ -468,7 +429,7 @@ func main() {
 	}
 
 	listenner := client.NewListen(socket, pidCounting)
-	listenner.SetCameras(camerasByDoor)
+	listenner.SetCameras(cfgInicial.Camaras)
 	listenner.SetLogError(errlog).SetLogWarn(warnlog).
 		SetLogInfo(infolog).SetLogBuild(buildlog).SetLogCamera(cameralog)
 
@@ -488,6 +449,20 @@ func main() {
 	rootContext.Send(pidListen, &messages.CountingActor{
 		Address: pidCounting.Address,
 		ID:      pidCounting.Id})
+
+	// counting necesita el PID de listenner para pasarle la lista de cámaras cuando la
+	// plataforma la cambie. Va en este sentido porque el orden de arranque es el inverso:
+	// listenner se construye CON el PID de counting, así que counting no puede conocerlo
+	// antes.
+	rootContext.Send(pidCounting, &client.MsgRegistrarListen{PID: pidListen})
+
+	// La configuración de plataforma se levanta al final, cuando el árbol ya está en pie:
+	// lo primero que hace es mandar un MsgAplicarConfig, y no tendría a quién.
+	if disablePlatformConfig {
+		infolog.Println("config: -disablePlatformConfig, no se descarga configuración de plataforma")
+	} else {
+		arrancarParametros(sistema, base, fijados, pidCounting)
+	}
 
 	time.Sleep(3 * time.Second)
 

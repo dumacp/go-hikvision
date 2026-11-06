@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
@@ -36,29 +37,45 @@ type ListenActor struct {
 
 	cancel func()
 
-	socket  string
-	cameras []string
+	socket string
+
+	// cameras va detrás de un candado porque lo LEE la goroutine del servidor HTTP —en
+	// doorID, una vez por evento— y lo ESCRIBE Receive cuando la plataforma manda una
+	// configuración nueva. Sin el candado eso es una carrera sobre el dato que decide a
+	// qué puerta va cada pasajero.
+	camerasMu sync.RWMutex
+	cameras   []string
 }
 
 // SetCameras configures the camera address of each door, where the index is the door
 // id. An empty list keeps the historical hardcoded behaviour.
 func (act *ListenActor) SetCameras(ips []string) *ListenActor {
-	act.cameras = ips
+	act.camerasMu.Lock()
+	act.cameras = append([]string(nil), ips...)
+	act.camerasMu.Unlock()
 	return act
+}
+
+// camarasActuales devuelve una vista de la lista para usarla sin el candado tomado.
+func (act *ListenActor) camarasActuales() []string {
+	act.camerasMu.RLock()
+	defer act.camerasMu.RUnlock()
+	return act.cameras
 }
 
 // doorID maps the source address of an event to a door id.
 func (act *ListenActor) doorID(remoteIP string) int {
-	for id, ip := range act.cameras {
+	cameras := act.camarasActuales()
+	for id, ip := range cameras {
 		if len(ip) > 0 && strings.Contains(remoteIP, ip) {
 			return id
 		}
 	}
-	if len(act.cameras) > 0 {
+	if len(cameras) > 0 {
 		// Counting it as door 0 keeps the passenger in the totals, which beats
 		// dropping the event, but the door breakdown is wrong: say so loudly.
 		act.warnLog.Printf("event from %q does not match any -camera %v, counted as door 0",
-			remoteIP, act.cameras)
+			remoteIP, cameras)
 		return 0
 	}
 	if len(remoteIP) == 0 {
@@ -99,6 +116,11 @@ func (act *ListenActor) Receive(ctx actor.Context) {
 		}
 	case *messages.CountingActor:
 		act.countingActor = actor.NewPID(msg.Address, msg.ID)
+	case *MsgSetCameras:
+		// La lista que decide a qué puerta va cada evento. Llega de CountingActor cuando
+		// la plataforma la cambia.
+		act.SetCameras(msg.Cameras)
+		act.infoLog.Printf("camaras reconfiguradas: %v", msg.Cameras)
 	case *msgListenError:
 		act.errLog.Panicln("listen error")
 	}

@@ -3,7 +3,7 @@ module github.com/dumacp/go-hikvision
 go 1.25.0
 
 require (
-	github.com/asynkron/protoactor-go v0.0.0-20230414121700-22ab527f4f7a
+	github.com/asynkron/protoactor-go v0.0.0-20230812113646-3987052e6743
 	github.com/bluenviron/gortsplib/v5 v5.6.4
 	github.com/bluenviron/mediacommon/v2 v2.9.3
 	github.com/dumacp/go-actors v0.1.0
@@ -15,7 +15,17 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/pion/rtp v1.10.5
 	golang.org/x/exp/errors v0.0.0-20210916165020-5cb4fee858ee
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.36.8
+)
+
+require (
+	github.com/asynkron/gofun v0.0.0-20220329210725-34fed760f4c2 // indirect
+	github.com/looplab/fsm v1.0.1 // indirect
+	go.etcd.io/bbolt v1.3.7 // indirect
+	golang.org/x/exp v0.0.0-20221012134508-3640c57a48ea // indirect
+	golang.org/x/text v0.41.0 // indirect
+	google.golang.org/genproto v0.0.0-20230306155012-7f2fa6fef1f4 // indirect
+	google.golang.org/grpc v1.55.0 // indirect
 )
 
 require (
@@ -24,10 +34,12 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/dumacp/go-gwiot v1.2.24-0.20261101194921-f2d0862b04ef
+	github.com/dumacp/go-params v1.0.4-0.20261101194921-d5b341d7ab94
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/go-logr/logr v1.2.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
@@ -59,3 +71,5 @@ require (
 )
 
 replace github.com/asynkron/protoactor-go => ../../asynkron/protoactor-go
+
+replace github.com/dumacp/go-params => ../go-params-cameracount

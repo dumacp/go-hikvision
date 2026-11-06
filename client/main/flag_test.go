@@ -177,29 +177,3 @@ func TestZeroFlagsSet(t *testing.T) {
 		}
 	}
 }
-
-func TestDescribeDoorBool(t *testing.T) {
-	if got := describeDoorBool([]bool{true}); got != "true (todas las puertas)" {
-		t.Errorf("un valor = %q", got)
-	}
-	quiero := "puerta 0 = false, puerta 1 = true"
-	if got := describeDoorBool([]bool{false, true}); got != quiero {
-		t.Errorf("dos valores = %q, quiero %q", got, quiero)
-	}
-}
-
-func TestDescribeCameras(t *testing.T) {
-	casos := []struct {
-		in     []string
-		quiero string
-	}{
-		{nil, "ninguna"},
-		{[]string{"", "192.168.188.21"}, "puerta 1 -> 192.168.188.21"},
-		{[]string{"10.0.0.1", "10.0.0.2"}, "puerta 0 -> 10.0.0.1, puerta 1 -> 10.0.0.2"},
-	}
-	for _, c := range casos {
-		if got := describeCameras(c.in); got != c.quiero {
-			t.Errorf("describeCameras(%v) = %q, quiero %q", c.in, got, c.quiero)
-		}
-	}
-}

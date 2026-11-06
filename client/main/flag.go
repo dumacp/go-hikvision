@@ -1,10 +1,49 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/dumacp/go-hikvision/client"
 )
+
+// flagsPasados devuelve los flags que de verdad aparecieron en la línea de comandos.
+//
+// Es la pieza que hace posible la regla de prioridad de este binario —el flag explícito le
+// gana a la plataforma— y no se puede reemplazar por "mirar si el valor es distinto del
+// default": `-videoFrameRate 0` y no pasar el flag dejan exactamente la misma variable. Los
+// otros binarios de la flota comparan contra el valor y por eso su merge no distingue las
+// dos cosas.
+//
+// flag.Visit recorre SOLO los flags fijados; flag.VisitAll los recorrería todos.
+func flagsPasados() map[string]bool {
+	fijados := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) { fijados[f.Name] = true })
+	return fijados
+}
+
+// configuracionBase arma la configuración que sale de los flags y los defaults. Es sobre
+// esto que la plataforma rellena lo que el flag no fijó.
+func configuracionBase(camerasByDoor []string) client.Efectiva {
+	base := client.Efectiva{
+		Camaras:             camerasByDoor,
+		ZeroOpenState:       make(map[int]bool),
+		CountWithCloseDoor:  make(map[int]bool),
+		NtpServer:           ntpServer,
+		VideoCodec:          videoCodec,
+		SmartCodec:          smartCodec,
+		VideoFrameRate:      videoFrameRate,
+		VideoEnabled:        videoEnabled,
+		VideoDir:            videoDir,
+		CameraPowerGPIO:     cameraPowerGPIO,
+		CameraPowerOffLevel: cameraPowerOffLevel,
+	}
+	applyDoorBool(isZeroOpenState, func(id int, v bool) { base.ZeroOpenState[id] = v })
+	applyDoorBool(enableCountWithCloseDoor, func(id int, v bool) { base.CountWithCloseDoor[id] = v })
+	return base
+}
 
 // zeroFlags y closeFlags recogen las apariciones de -zeroOpenState y -countWithCloseDoor.
 // La sintaxis no cambió nunca: un booleano por aparición, y cualquier valor distinto de
@@ -64,27 +103,10 @@ func applyDoorBool(values []bool, set func(id int, v bool)) {
 	}
 }
 
-// describeDoorBool arma la línea del banner. Con un solo valor dice que va a todas las
-// puertas, porque el `[true]` crudo no dejaba ver a cuál aplicaba — que era justamente la
-// parte que se malinterpretaba.
-func describeDoorBool(values []bool) string {
-	if len(values) == 1 {
-		return fmt.Sprintf("%v (todas las puertas)", values[0])
-	}
-	partes := make([]string, 0, len(values))
-	for id, v := range values {
-		partes = append(partes, fmt.Sprintf("puerta %d = %v", id, v))
-	}
-	return strings.Join(partes, ", ")
-}
-
-// maxDoorID bounds the explicit door id of -camera. It is a guard against a typo, not a
-// modelled limit: writing `-camera 192.168.188.21:8080` —a port, not a door— would
-// otherwise build a slice of 8081 entries and silently count nothing.
-//
-// Only doors 0 and 1 appear in the MQTT `registerMap`; a third one would be counted
-// internally but not published.
-const maxDoorID = 15
+// maxDoorID bounds the explicit door id of -camera. La definición vive en
+// client.MaxDoorID porque la configuración que baja de la plataforma valida contra el mismo
+// límite, y dos constantes separadas se desincronizan sin que nada falle.
+const maxDoorID = client.MaxDoorID
 
 // cameraFlags collects the -camera occurrences verbatim. Two forms are accepted:
 //
@@ -164,21 +186,4 @@ func resolveCameras(raw []string) ([]string, error) {
 		out[id] = ip
 	}
 	return out, nil
-}
-
-// describeCameras arma la línea del banner de arranque. Imprime el id de cada puerta en
-// vez del slice crudo, porque `[ 192.168.188.21]` esconde justamente el índice, que es lo
-// único que importa acá.
-func describeCameras(cams []string) string {
-	partes := make([]string, 0, len(cams))
-	for id, ip := range cams {
-		if len(ip) == 0 {
-			continue
-		}
-		partes = append(partes, fmt.Sprintf("puerta %d -> %s", id, ip))
-	}
-	if len(partes) == 0 {
-		return "ninguna"
-	}
-	return strings.Join(partes, ", ")
 }
