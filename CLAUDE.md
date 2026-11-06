@@ -24,18 +24,11 @@ cd client/messages && ./protobuf.sh
 **Dependencias**: `go-doors` y `go-actors` se consumen por versión publicada (`v1.2.1` y
 `v0.1.0`); antes iban por `replace` al filesystem y ya no hace falta tenerlos clonados.
 
-**Hay un `replace` TEMPORAL que hay que quitar**:
-`github.com/dumacp/go-params => ../go-params-cameracount`. Apunta a un git worktree con el
-commit que agrega `DEV_CAMERACOUNT_CONFIG` (rama `feat/cameracount-config`). En cuanto ese
-commit esté publicado, se reemplaza por la versión y **se borra el replace y el worktree**:
+`go-params` se consume por la versión publicada de la rama `feat/cameracount-config`
+(`v1.0.4-0.20261106182210-64e61f53dbce`), que es la que mapea `DEV_CAMERACOUNT_CONFIG`.
+Cuando esa rama entre a la principal de `go-params` y tenga tag, conviene subir a esa versión.
 
-```bash
-go mod edit -dropreplace=github.com/dumacp/go-params
-go get github.com/dumacp/go-params@<la-version-nueva>
-git -C ../go-params worktree remove ../go-params-cameracount
-```
-
-**Y queda otro `replace`, ese sí obligatorio**: `github.com/asynkron/protoactor-go => ../../asynkron/protoactor-go`.
+**Queda UN `replace`, y es obligatorio**: `github.com/asynkron/protoactor-go => ../../asynkron/protoactor-go`.
 El checkout local lleva dos parches que no existen en ningún commit publicado, y uno de ellos
 **evita un panic en armv7**, que es la arquitectura de destino:
 

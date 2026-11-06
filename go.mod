@@ -35,7 +35,7 @@ require (
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/dumacp/go-gwiot v1.2.24-0.20261101194921-f2d0862b04ef
-	github.com/dumacp/go-params v1.0.4-0.20261101194921-d5b341d7ab94
+	github.com/dumacp/go-params v1.0.4-0.20261106182210-64e61f53dbce
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/go-logr/logr v1.2.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -71,5 +71,3 @@ require (
 )
 
 replace github.com/asynkron/protoactor-go => ../../asynkron/protoactor-go
-
-replace github.com/dumacp/go-params => ../go-params-cameracount
