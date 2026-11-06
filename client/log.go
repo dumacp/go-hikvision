@@ -53,6 +53,20 @@ func (act *Logger) WithDebug() *Logger {
 	return act
 }
 
+// Accesores exportados, para los actores que viven en subpaquetes de client.
+//
+// Los cinco niveles se inyectan desde main y hasta ahora solo los usaban actores del propio
+// paquete, así que alcanzaba con campos privados. Un actor en client/parametros no puede
+// llegar a ellos, y darle su propio juego de loggers partiría los prefijos en dos: la mitad
+// del binario escribiendo "[ WARN ]" y la otra mitad otra cosa, en el mismo archivo de
+// syslog.
+func (act *Logger) InitLogs()              { act.initLogs() }
+func (act *Logger) LogError() *log.Logger  { return act.errLog }
+func (act *Logger) LogWarn() *log.Logger   { return act.warnLog }
+func (act *Logger) LogInfo() *log.Logger   { return act.infoLog }
+func (act *Logger) LogBuild() *log.Logger  { return act.buildLog }
+func (act *Logger) LogCamera() *log.Logger { return act.cameralog }
+
 func (act *Logger) initLogs() {
 	if act.errLog == nil {
 		act.errLog = log.New(os.Stderr, "[ ERROR ] :", 3)

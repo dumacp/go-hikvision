@@ -109,6 +109,22 @@ func SubscribeFun(topic string, pid *actor.PID, parse func([]byte) (interface{},
 	return nil
 }
 
+// Subscribe es SubscribeFun con la firma que esperan los actores de descubrimiento de
+// go-gwiot: el parser devuelve el mensaje o un error COMO VALOR, no como segundo retorno.
+//
+// Son dos convenciones que conviven en la flota —este archivo tiene un gemelo en
+// go-counterpass con exactamente esta firma— y traducir acá es más barato que cambiarle la
+// firma a los cuatro parsers que ya usan SubscribeFun en este binario.
+func Subscribe(topic string, pid *actor.PID, parse func([]byte) interface{}) error {
+	return SubscribeFun(topic, pid, func(b []byte) (interface{}, error) {
+		v := parse(b)
+		if err, ok := v.(error); ok {
+			return nil, err
+		}
+		return v, nil
+	})
+}
+
 func (ps *pubsubActor) subscribe(topic string, subs *subscribeMSG) error {
 	handler := func(client mqtt.Client, m mqtt.Message) {
 		// logs.LogBuild.Printf("local topic -> %q", m.Topic())
