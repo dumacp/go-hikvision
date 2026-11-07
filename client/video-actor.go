@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -111,6 +112,11 @@ type VideoActor struct {
 	// No se invalida en caliente: un cambio de cámaras reconstruye este actor.
 	horaLocal map[int32]bool
 
+	// sinDescarga marca las puertas cuya cámara no ofrece /ISAPI/ContentMgmt/download
+	// (la G0 responde methodNotAllowed): ahí se extrae por RTSP sin volver a intentar la
+	// descarga. Es propiedad del modelo, así que se aprende una vez por puerta.
+	sinDescarga map[int32]bool
+
 	// hostname del equipo donde corre el binario, resuelto una vez al construir el
 	// actor: identifica de qué gateway salió el clip cuando todos suben al mismo lugar.
 	hostname string
@@ -168,6 +174,8 @@ type msgVideoDone struct {
 	// horaConocida: la búsqueda o el recorte lo confirmaron en esta pasada.
 	horaLocal    bool
 	horaConocida bool
+	// sinDescarga indica que la cámara respondió que no ofrece la descarga HTTP.
+	sinDescarga bool
 	// reintentar indica que el índice de la cámara todavía no llegaba al final de la
 	// ventana y queda plazo para esperarlo: el grupo vuelve a la cola.
 	reintentar bool
@@ -204,6 +212,7 @@ func NewVideoActor(cameras []string, user, pass, dir string, preRoll, duration t
 	}
 	a.camInfo = make(map[int32]camIdent)
 	a.horaLocal = make(map[int32]bool)
+	a.sinDescarga = make(map[int32]bool)
 	a.lastEvent = make(map[int32]time.Time)
 	// Sin información de ignition se asume encendida; ver el campo.
 	a.camaraEncendida = true
@@ -275,6 +284,11 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 		if len(msg.ident.serial) > 0 {
 			a.camInfo[anchor.door] = msg.ident
 		}
+		if msg.sinDescarga && !a.sinDescarga[anchor.door] {
+			a.sinDescarga[anchor.door] = true
+			a.infoLog.Printf("la cámara de la puerta %d no ofrece descarga de grabaciones: "+
+				"su video se extrae por RTSP", anchor.door)
+		}
 		if msg.horaConocida {
 			if previa, ok := a.horaLocal[anchor.door]; !ok || previa != msg.horaLocal {
 				a.infoLog.Printf("la cámara de la puerta %d indexa sus grabaciones en %s",
@@ -318,8 +332,8 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 			a.errLog.Printf("extrayendo video de la puerta %d (%s, %d evento(s)): %s",
 				anchor.door, anchor.when.Format(time.RFC3339), len(msg.group), msg.err)
 		default:
-			a.infoLog.Printf("video %s: %s, %d muestras, %v, hueco máx %v, %d bytes en %v, %d evento(s) en la ventana",
-				filepath.Base(msg.dest), msg.res.Codec, msg.res.Samples,
+			a.infoLog.Printf("video %s: %s por %s, %d muestras, %v, hueco máx %v, %d bytes en %v, %d evento(s) en la ventana",
+				filepath.Base(msg.dest), msg.res.Codec, msg.res.Via, msg.res.Samples,
 				msg.res.Duration.Round(time.Millisecond),
 				msg.res.MaxGap.Round(time.Millisecond), msg.res.Bytes,
 				msg.res.Elapsed.Round(time.Millisecond), len(msg.group))
@@ -538,6 +552,7 @@ func (a *VideoActor) next(ctx actor.Context) {
 	host := a.cameraFor(anchor.door)
 	ident := a.camInfo[anchor.door]
 	preferLocal := a.horaLocal[anchor.door]
+	sinDescarga := a.sinDescarga[anchor.door]
 	hostname := a.hostname
 
 	dir := filepath.Join(a.dir, anchor.when.Local().Format("2006-01-02"))
@@ -612,12 +627,37 @@ func (a *VideoActor) next(ctx actor.Context) {
 			return
 		}
 
-		// La convención que encontró la grabación es la misma que entiende la
-		// reproducción: se pasa resuelta y el recorte no paga el intento fallido.
-		res, err := video.Extract(cctx, video.Request{
-			Host: host, User: a.user, Pass: a.pass, Track: videoTrack,
-			Start: desde, Duration: a.duration, Dest: clip, HoraLocal: horaLocal,
-		})
+		// Primero la descarga HTTP de los archivos grabados, después el RTSP.
+		//
+		// El orden no es indiferente: en la G1 (V4.2.2) el RTSP de reproducción devuelve
+		// un stream truncado e idéntico para cualquier instante, SIN error —el clip sale
+		// verde y nada lo delata—, mientras la descarga entrega la grabación intacta. En
+		// la G0 la descarga no existe y responde methodNotAllowed: eso se aprende y la
+		// puerta queda en RTSP, que en ese modelo sí funciona.
+		var res *video.Result
+		if !sinDescarga && len(cov.Archivos) > 0 {
+			archivos := make([]video.ArchivoGrabado, 0, len(cov.Archivos))
+			for _, ar := range cov.Archivos {
+				archivos = append(archivos, video.ArchivoGrabado{Desde: ar.Desde, PlaybackURI: ar.PlaybackURI})
+			}
+			res, err = video.ExtraerDescarga(cctx, video.Descarga{
+				Abrir:    cli.Download,
+				Archivos: archivos,
+				Start:    desde, Duration: a.duration, Dest: clip,
+			})
+			if errors.Is(err, isapi.ErrDescargaNoSoportada) {
+				done.sinDescarga = true
+				res, err = nil, nil
+			}
+		}
+		if res == nil && err == nil {
+			// La convención que encontró la grabación es la misma que entiende la
+			// reproducción: se pasa resuelta y el recorte no paga el intento fallido.
+			res, err = video.Extract(cctx, video.Request{
+				Host: host, User: a.user, Pass: a.pass, Track: videoTrack,
+				Start: desde, Duration: a.duration, Dest: clip, HoraLocal: horaLocal,
+			})
+		}
 		if err != nil {
 			done.err = err
 			system.Root.Send(self, done)
@@ -725,9 +765,14 @@ func (a *VideoActor) cameraFor(door int32) string {
 // video ocurrió este cruce, así que no hace falta buscarlo.
 //
 // ClipStart es el instante PEDIDO. El video real puede empezar hasta un GOP antes
-// (medido: 2 s a 20 fps) porque la cámara posiciona la reproducción en el keyframe
-// anterior. Eso da más pre-roll que el configurado, nunca menos, pero conviene no
-// tomar este valor como el primer frame exacto, ni OffsetS como exacto al frame.
+// (medido: 2 s a 20 fps en la G0, 4.2 s en la G1) porque el clip arranca en el keyframe
+// anterior. Eso da más pre-roll que el configurado, nunca menos, pero no es el primer
+// frame.
+//
+// OffsetS se mide contra el primer frame REAL cuando se conoce (video.Result.Inicio,
+// siempre por descarga) y entonces es exacto. Por RTSP la cámara no dice dónde empezó y
+// se mide contra el instante pedido: se queda corto en hasta un GOP. Medido el
+// 2026-11-07 en la G1: con 10 s pedidos, el cruce estaba en el segundo 13.
 type sidecar struct {
 	// EventID es la misma llave que viaja en el evento COUNTERSDOOR de MQTT.
 	EventID string `json:"event_id"`
@@ -781,6 +826,14 @@ func round2(f float64) float64 {
 	return float64(int(f*100+0.5)) / 100
 }
 
+// inicioReal es el primer frame del clip si el extractor lo conoce, o el instante pedido.
+func inicioReal(pedido time.Time, res *video.Result) time.Time {
+	if res != nil && !res.Inicio.IsZero() {
+		return res.Inicio
+	}
+	return pedido
+}
+
 func writeSidecar(path string, job videoJob, gateway, host string, ident camIdent, clip string, start time.Time, dur time.Duration, res *video.Result) error {
 	s := sidecar{
 		EventID:         job.uid,
@@ -791,7 +844,7 @@ func writeSidecar(path string, job videoJob, gateway, host string, ident camIden
 		EventTimeMs:     job.when.UTC().UnixMilli(),
 		Clip:            filepath.Base(clip),
 		ClipStart:       start.Local().Format(time.RFC3339),
-		OffsetS:         job.when.Sub(start).Seconds(),
+		OffsetS:         job.when.Sub(inicioReal(start, res)).Seconds(),
 		DurationS:       int(dur.Seconds()),
 		Camera:          host,
 		CameraSerial:    ident.serial,

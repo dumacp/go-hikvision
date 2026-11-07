@@ -1,6 +1,9 @@
 // Package video extrae un tramo grabado de una cámara Hikvision y lo escribe como MP4.
 //
-// Habla RTSP en Go puro, sin ffmpeg: así el binario cross-compila a cualquier
+// Hay dos vías: bajar el archivo grabado por HTTP (ExtraerDescarga, descarga.go), que es la
+// que funciona en la G1 (V4.2.2), y la reproducción por RTSP (Extract), que es la de la G0.
+//
+// Todo en Go puro, sin ffmpeg: así el binario cross-compila a cualquier
 // arquitectura sin mantener un ejecutable externo por plataforma, y las credenciales
 // nunca aparecen en la línea de comandos de otro proceso.
 //
@@ -97,6 +100,13 @@ type Result struct {
 	// Quien extraiga varias veces de la misma cámara debería guardarlo y pasarlo en
 	// la Request siguiente: así se ahorra el intento fallido de la detección.
 	HoraLocal bool
+	// Via dice por dónde se obtuvo: ViaRTSP o ViaDescarga.
+	Via string
+	// Inicio es el instante del PRIMER cuadro del clip, en la hora de la cámara, cuando
+	// se conoce. Por descarga se conoce siempre: es el keyframe anterior al Start pedido,
+	// hasta un GOP antes (medido en la G1: 4.2 s). Por RTSP la cámara no lo dice y queda
+	// en cero.
+	Inicio time.Time
 }
 
 // PlaybackURL arma la URL de reproducción por hora.
@@ -174,32 +184,9 @@ func nuevoFlujo(desc *description.Session) (*flujoCodec, error) {
 		if err != nil {
 			return nil, fmt.Errorf("video: decoder RTP H.264: %w", err)
 		}
-		ex := h264.NewDTSExtractor()
-		ex.Initialize()
-		sps, pps := f264.SPS, f264.PPS
-		return &flujoCodec{
-			nombre: "H.264",
-			medi:   medi,
-			forma:  f264,
-			decode: dec.Decode,
-			dts:    ex.Extract,
-			sync:   h264.IsRandomAccess,
-			sniff: func(au [][]byte) {
-				for _, nalu := range au {
-					if len(nalu) == 0 {
-						continue
-					}
-					// En H.264 el tipo son los 5 bits bajos del primer byte.
-					switch h264.NALUType(nalu[0] & 0x1F) {
-					case h264.NALUTypeSPS:
-						sps = nalu
-					case h264.NALUTypePPS:
-						pps = nalu
-					}
-				}
-			},
-			mp4: func() codecs.Codec { return &codecs.H264{SPS: sps, PPS: pps} },
-		}, nil
+		f := flujoH264(f264.SPS, f264.PPS)
+		f.medi, f.forma, f.decode = medi, f264, dec.Decode
+		return f, nil
 	}
 
 	var f265 *format.H265
@@ -208,37 +195,67 @@ func nuevoFlujo(desc *description.Session) (*flujoCodec, error) {
 		if err != nil {
 			return nil, fmt.Errorf("video: decoder RTP H.265: %w", err)
 		}
-		ex := h265.NewDTSExtractor()
-		ex.Initialize()
-		vps, sps, pps := f265.VPS, f265.SPS, f265.PPS
-		return &flujoCodec{
-			nombre: "H.265",
-			medi:   medi,
-			forma:  f265,
-			decode: dec.Decode,
-			dts:    ex.Extract,
-			sync:   h265.IsRandomAccess,
-			sniff: func(au [][]byte) {
-				for _, nalu := range au {
-					if len(nalu) == 0 {
-						continue
-					}
-					// H.265 corre el tipo un bit y usa 6 bits, no 5: es la trampa al
-					// portar el sniffing desde H.264.
-					switch h265.NALUType((nalu[0] >> 1) & 0x3F) {
-					case h265.NALUType_VPS_NUT:
-						vps = nalu
-					case h265.NALUType_SPS_NUT:
-						sps = nalu
-					case h265.NALUType_PPS_NUT:
-						pps = nalu
-					}
-				}
-			},
-			mp4: func() codecs.Codec { return &codecs.H265{VPS: vps, SPS: sps, PPS: pps} },
-		}, nil
+		f := flujoH265(f265.VPS, f265.SPS, f265.PPS)
+		f.medi, f.forma, f.decode = medi, f265, dec.Decode
+		return f, nil
 	}
 	return nil, errors.New("video: la cámara no ofrece un stream H.264 ni H.265")
+}
+
+// flujoH264 arma lo que depende del codec para H.264, partiendo de los parameter sets
+// conocidos (pueden venir vacíos: se toman los que lleguen en banda).
+func flujoH264(sps, pps []byte) *flujoCodec {
+	ex := h264.NewDTSExtractor()
+	ex.Initialize()
+	return &flujoCodec{
+		nombre: "H.264",
+		dts:    ex.Extract,
+		sync:   h264.IsRandomAccess,
+		sniff: func(au [][]byte) {
+			for _, nalu := range au {
+				if len(nalu) == 0 {
+					continue
+				}
+				// En H.264 el tipo son los 5 bits bajos del primer byte.
+				switch h264.NALUType(nalu[0] & 0x1F) {
+				case h264.NALUTypeSPS:
+					sps = nalu
+				case h264.NALUTypePPS:
+					pps = nalu
+				}
+			}
+		},
+		mp4: func() codecs.Codec { return &codecs.H264{SPS: sps, PPS: pps} },
+	}
+}
+
+// flujoH265 es flujoH264 para H.265.
+func flujoH265(vps, sps, pps []byte) *flujoCodec {
+	ex := h265.NewDTSExtractor()
+	ex.Initialize()
+	return &flujoCodec{
+		nombre: "H.265",
+		dts:    ex.Extract,
+		sync:   h265.IsRandomAccess,
+		sniff: func(au [][]byte) {
+			for _, nalu := range au {
+				if len(nalu) == 0 {
+					continue
+				}
+				// H.265 corre el tipo un bit y usa 6 bits, no 5: es la trampa al
+				// portar el sniffing desde H.264.
+				switch h265.NALUType((nalu[0] >> 1) & 0x3F) {
+				case h265.NALUType_VPS_NUT:
+					vps = nalu
+				case h265.NALUType_SPS_NUT:
+					sps = nalu
+				case h265.NALUType_PPS_NUT:
+					pps = nalu
+				}
+			}
+		},
+		mp4: func() codecs.Codec { return &codecs.H265{VPS: vps, SPS: sps, PPS: pps} },
+	}
 }
 
 // Extract recorta un tramo grabado y lo escribe como MP4.
@@ -374,6 +391,7 @@ func extraer(ctx context.Context, req Request) (*Result, error) {
 	res.Codec = flujo.nombre
 	res.Elapsed = time.Since(inicio)
 	res.HoraLocal = req.HoraLocal
+	res.Via = ViaRTSP
 	return res, nil
 }
 

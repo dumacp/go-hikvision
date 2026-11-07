@@ -175,8 +175,12 @@ milisegundos que leer.
 
 **`clip_start_requested` es el instante pedido, no el primer frame.** La cámara posiciona la
 reproducción en el keyframe anterior, así que el video puede empezar hasta un GOP antes —
-medido: 2 s a 20 fps. Da más pre-roll que el configurado, nunca menos. Lo mismo vale para
-`offset_s`: **es aproximado al frame**, no exacto.
+medido: 2 s a 20 fps en un modelo y 4.2 s en otro. Da más pre-roll que el configurado, nunca
+menos. **`offset_s`, en cambio, se mide contra el primer frame real del clip** siempre que el
+binario lo conoce —en los clips bajados por descarga HTTP, que es como se extrae el modelo
+nuevo— y entonces es exacto. En los extraídos por RTSP se mide contra el instante pedido y
+puede quedarse corto hasta un GOP: el cruce aparece unos segundos **después** del
+`offset_s`, nunca antes.
 
 **`camera_counter` es el incremento, no el acumulado.** Cuando es mayor que `1`, el evento
 cuenta varios pasajeros y el clip puede no mostrarlos a todos — pasa cuando el binario

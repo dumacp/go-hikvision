@@ -188,6 +188,17 @@ type Cobertura struct {
 	Pendiente bool
 	// IndexadoHasta es el último instante del tramo que motivó Pendiente.
 	IndexadoHasta time.Time
+	// Archivos son los archivos grabados que tocan la ventana, en orden, con su inicio
+	// ya interpretado en la convención correcta. Hacen falta para bajar el video por
+	// Download, que pide un archivo entero por su playbackURI. Solo con Tramo.
+	Archivos []Archivo
+}
+
+// Archivo es un archivo de grabación tal como lo devuelve la búsqueda.
+type Archivo struct {
+	Desde, Hasta time.Time
+	// PlaybackURI es el de la búsqueda, sin tocar: Download lo exige así.
+	PlaybackURI string
 }
 
 // HasCoverage indica qué tiene grabado la cámara para la ventana [from, to].
@@ -241,6 +252,11 @@ func (c *Client) cobertura(ctx context.Context, track int, from, to time.Time, s
 			rec := t.rec
 			cov.Tramo = &rec
 			cov.Pendiente = false
+			for _, a := range t.partes {
+				if a.Hasta.After(from) && a.Desde.Before(to) {
+					cov.Archivos = append(cov.Archivos, a)
+				}
+			}
 			return cov, nil
 		case !from.Before(t.desde) && to.After(t.hasta):
 			// Viene grabando desde antes de la ventana y el índice no llega al final.
@@ -257,6 +273,8 @@ func (c *Client) cobertura(ctx context.Context, track int, from, to time.Time, s
 type tramo struct {
 	desde, hasta time.Time
 	rec          Recording
+	// partes son los archivos que se unieron para formar el tramo.
+	partes []Archivo
 }
 
 // unirTramos interpreta los tramos de la respuesta, los ordena y une los contiguos
@@ -273,7 +291,8 @@ func unirTramos(matches []Recording, loc *time.Location, horaLocal bool) []tramo
 			d = relojDePared(m.StartTime, d, loc)
 			h = relojDePared(m.EndTime, h, loc)
 		}
-		ts = append(ts, tramo{desde: d, hasta: h, rec: m})
+		ts = append(ts, tramo{desde: d, hasta: h, rec: m,
+			partes: []Archivo{{Desde: d, Hasta: h, PlaybackURI: m.PlaybackURI}}})
 	}
 	sort.Slice(ts, func(i, j int) bool { return ts[i].desde.Before(ts[j].desde) })
 	var out []tramo
@@ -283,6 +302,7 @@ func unirTramos(matches []Recording, loc *time.Location, horaLocal bool) []tramo
 				out[n-1].hasta = t.hasta
 				out[n-1].rec.EndTime = t.rec.EndTime
 			}
+			out[n-1].partes = append(out[n-1].partes, t.partes...)
 			continue
 		}
 		out = append(out, t)

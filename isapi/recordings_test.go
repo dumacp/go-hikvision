@@ -202,3 +202,23 @@ func TestHasCoverageIndiceAtrasadoEsPendiente(t *testing.T) {
 		}
 	}
 }
+
+func TestHasCoverageDiceQueArchivosBajar(t *testing.T) {
+	gd, _, _, _ := ventana()
+	var n int
+	srv := digestServer(t, camaraGrabando(t, gd, gd.Add(15*time.Minute), true, &n))
+	defer srv.Close()
+
+	// Dentro de un solo archivo.
+	from := gd.Add(time.Minute)
+	cov, err := clientFor(srv).HasCoverage(context.Background(), 101, from, from.Add(16*time.Second), "id", true)
+	if err != nil || len(cov.Archivos) != 1 || !cov.Archivos[0].Desde.Equal(gd) {
+		t.Fatalf("debía ser el primer archivo, que empieza en %v: %+v err=%v", gd, cov.Archivos, err)
+	}
+	// Cruzando el corte: los dos, en orden.
+	from = gd.Add(5*time.Minute - 8*time.Second)
+	cov, err = clientFor(srv).HasCoverage(context.Background(), 101, from, from.Add(16*time.Second), "id", true)
+	if err != nil || len(cov.Archivos) != 2 || !cov.Archivos[1].Desde.Equal(gd.Add(5*time.Minute)) {
+		t.Fatalf("debían ser los dos archivos del corte: %+v err=%v", cov.Archivos, err)
+	}
+}

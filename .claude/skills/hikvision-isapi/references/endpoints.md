@@ -292,7 +292,10 @@ Bonus para auditoría: **el OSD lleva quemados la fecha, la hora y los contadore
    (abajo). Hay que mandarle el `playbackURI` **tal cual lo devuelve la búsqueda**, con `name` y
    `size`: entrega el archivo entero de ese tramo (hasta 5 min) como MPEG-PS con H.265, y la
    imagen sale perfecta. Con un `playbackURI` armado a mano —16 s, sin `name` ni `size`— se
-   cuelga sin entregar un byte.
+   cuelga sin entregar un byte. Implementado en `isapi.Client.Download` (streaming) y
+   `video.ExtraerDescarga` (lector de MPEG-PS propio). Del archivo, el video H.265 va en el
+   stream `0xE0` (un PES por cuadro, PTS en el primero) y pesa ~20 KB/s; los datos privados
+   de Hikvision en `0xBD` pesan ~20 veces más y se descartan.
 
 `isapi.SearchRecordings` y `isapi.HasCoverage` implementan la guarda del punto 1.
 `HasCoverage` prueba UTC y luego hora local, une los tramos contiguos y distingue "no hay" de

@@ -82,8 +82,9 @@ root
 └── pubsub-actor-XXXX singleton MQTT (lo crea InitPubSub desde counting/Started)
 ```
 
-El paquete [video/](video/) extrae un tramo grabado por RTSP y lo escribe como MP4, en Go puro
-(`gortsplib` + `mediacommon`). Sin ffmpeg **a propósito**: el binario cross-compila a cualquier
+El paquete [video/](video/) extrae un tramo grabado y lo escribe como MP4, en Go puro, por dos
+vías: la descarga HTTP del archivo grabado (`ExtraerDescarga`, con un lector de MPEG-PS propio)
+y la reproducción por RTSP (`Extract`, con `gortsplib` + `mediacommon`). Sin ffmpeg **a propósito**: el binario cross-compila a cualquier
 arquitectura con un solo `go build` y las credenciales nunca aparecen en la línea de comandos de
 otro proceso. Costo medido: +1.8 MB en armv7.
 
@@ -139,7 +140,8 @@ Lo que todavía difiere es de transporte, y está absorbido:
 | `statisticalMethods` | `timeRange` | **`TimeRange`** | `esConteoDeVentana` compara sin distinguir mayúsculas |
 | namespace | `urn:psialliance-org` | `isapi.org/ver20` | el parser los ignora |
 | sabotaje | `scenechangedetection` | `shelteralarm` | ramas separadas, mismo `TAMPERING` |
-| reproducción por RTSP | sirve | **ROTA**: devuelve un stream truncado, el mismo para cualquier hora | descarga por HTTP (en curso) |
+| reproducción por RTSP | sirve | **ROTA**: devuelve un stream roto, el mismo para cualquier hora | `ExtraerDescarga` por `/ISAPI/ContentMgmt/download` |
+| descarga por HTTP | **no existe** (`methodNotAllowed`) | sirve, MPEG-PS con H.265 | se prueba primero y se aprende por puerta |
 | búsqueda de grabaciones | UTC | **reloj de pared**, ida y vuelta | `HasCoverage` prueba las dos y se cachea por puerta |
 | archivos e índice de grabación | sin medir | **archivos de 5 min**, índice **hasta ~2 min atrasado** | tramos unidos + reintento hasta 3 min |
 
@@ -378,15 +380,47 @@ cuál funcionó). **La segunda línea no era un clip válido, y nadie miró la i
 | grabado, `POST /ISAPI/ContentMgmt/download` con el `playbackURI` de la búsqueda | **perfecto**: OSD `2026-11-07 09:26:23`, MPEG-PS con H.265 |
 | grabado, `download` con un `playbackURI` de 16 s sin `name`/`size` | se cuelga sin entregar nada |
 
-El stream de RTSP trae ~25 KB/s cuando los archivos de la SD pesan ~247 KB/s, y con `ffmpeg`
-sale idéntico, así que no es el extractor: **la grabación está bien y la reproducción por RTSP de
-este firmware no**. `HoraLocal` sigue en el código porque no estorba —en la G0 el primer intento
+Con `ffmpeg` el stream de RTSP sale idéntico, así que no es el extractor: **la grabación está
+bien y la reproducción por RTSP de este firmware no**. (Un primer análisis lo atribuyó a que el
+RTSP traía ~25 KB/s contra ~247 KB/s de la SD: era falso. En el archivo de la SD el video pesa
+~20 KB/s y el resto son datos privados de Hikvision en el stream `0xBD`, que el binario
+descarta.) `HoraLocal` sigue en el código porque no estorba —en la G0 el primer intento
 en UTC funciona—, pero su premisa sobre el RTSP de la G1 no está demostrada. Lo que sí está
 medido es la convención de la **búsqueda** (abajo). La G1 se extrae por la descarga HTTP.
 
 **Y la verificación del clip tiene que mirar la imagen.** `max_gap_s` y `fps_effective` salieron
 normales en los clips rotos (191 muestras, hueco 0.23 s): miden la cadencia de las muestras, no
 si se pueden decodificar. Un clip "exitoso" no está verificado hasta que alguien vio un cuadro.
+
+**La G1 se extrae por descarga HTTP**, y `VideoActor` la intenta **primero en toda cámara**: si
+responde que no la soporta (`isapi.ErrDescargaNoSoportada`, lo que da la G0) la puerta queda en
+RTSP hasta el próximo arranque, sin configuración. El orden importa: el RTSP de la G1 no da
+error, entrega un clip roto, así que no hay forma de detectarlo y caer a la descarga.
+
+Cómo funciona `video.ExtraerDescarga`, y por qué así:
+
+- **La cámara solo entrega archivos enteros.** `Download` exige el `playbackURI` de la búsqueda
+  con `name` y `size`; uno recortado a la ventana se cuelga. Por eso `Cobertura.Archivos` dice
+  qué archivos cubren la ventana —uno, o dos si cruza un corte— y se bajan en orden.
+- **Se lee en streaming y no se guarda nada intermedio.** Lo anterior a la ventana se descarta al
+  llegar, salvo el GOP que la abre; al pasar el final se **cierra la conexión**. En disco queda
+  solo el MP4 (`.part` + rename) y sus sidecars, igual que por RTSP. El costo es de red: en el
+  peor caso —ventana al final de un archivo de 5 min— se leen ~74 MB por el cable a la cámara,
+  casi todo datos privados `0xBD`. Medido en el banco: **5 s por clip**, contra ~16 s del RTSP.
+  En el gateway (armv7) está sin medir.
+- **El instante de cada cuadro es el `Desde` del archivo más el avance de su PTS**, verificado
+  contra el OSD: el cuadro que el binario ubica en 09:26:34 muestra `09:26:34`.
+- **El empalme entre archivos se corrige.** El `Desde` viene redondeado al segundo y el IDR que
+  abre el segundo archivo caía *antes* que el último cuadro del primero; el extractor de DTS lo
+  rechazaba y el resto del GOP salía gris. Medido en el corte de las 09:28:38. Ahora cada
+  archivo arranca detrás del último cuadro visto, y un cuadro sin DTS válido **hace fallar la
+  extracción** en vez de escribir un clip roto.
+- **`Result.Inicio` es el primer frame real**, y con él `offset_s` sale exacto (ver el sidecar).
+
+Verificado de punta a punta el 2026-11-07, **mirando la imagen**: tres cruces, dos clips (uno
+agrupa dos eventos), el cruce visible en el segundo esperado y `ffmpeg` sin un solo error de
+decodificación. La muestra real de la prueba está en `video/testdata/g1_v422_gop.ps` (94 KB,
+4.6 s, sin los `0xBD`).
 
 **La búsqueda de grabaciones tiene el mismo problema, y por correr ANTES tapaba el arreglo
 anterior.** `POST /ISAPI/ContentMgmt/search` en la G1 lee los instantes de la petición como su
@@ -423,8 +457,8 @@ los PDF de `docs/` exponen nada que las controle.
   índice no llega al final, devuelve `Pendiente` en vez de "no hay", y el grupo vuelve a la cola
   cada `videoIndiceReintento` (20 s) hasta `videoIndiceEspera` (3 min, con el reloj del
   gateway). Verificado contra la cámara: un cruce encontró su tramo al primer reintento, el
-  otro a la primera. **Los clips que se extrajeron después salieron rotos**, por el RTSP (arriba):
-  la búsqueda está resuelta, la extracción de la G1 no.
+  otro a la primera. Los clips de esa prueba salieron rotos por el RTSP (arriba); con la
+  descarga HTTP, el mismo reintento termina en clips correctos.
 
 **El costo del reintento**: mientras un grupo espera su turno, la cola de video espera con él,
 así que en un vehículo con dos cámaras el clip de la otra puede salir hasta unos 2 minutos
@@ -494,8 +528,10 @@ Cuatro precisiones que evitan malinterpretarlo:
   envía el `dateTime` sin fracción, así que siempre termina en `000`. No leas precisión que no hay.
 - **`clip_start_requested` es el instante PEDIDO, no el primer frame.** La cámara posiciona la
   reproducción en el keyframe anterior, así que el video puede empezar hasta un GOP antes (medido:
-  2 s a 20 fps). Da más pre-roll que el configurado, nunca menos. Lo mismo vale para `offset_s`:
-  es aproximado al frame, no exacto.
+  2 s a 20 fps en la G0, 4.2 s en la G1). Da más pre-roll que el configurado, nunca menos.
+  **`offset_s` en cambio se mide contra el primer frame real cuando se conoce** —siempre en
+  los clips bajados por descarga (`video.Result.Inicio`)— y ahí es exacto. Por RTSP la cámara
+  no dice dónde empezó, se mide contra el instante pedido y se queda corto hasta un GOP.
 - **`camera_serial` y `camera_mac` se consultan una sola vez por cámara** con
   `isapi.GetDeviceInfo` y quedan en caché. Si esa consulta falla los campos van vacíos pero **la
   extracción sigue**: el clip vale más que su metadato. Son la identidad estable del equipo,

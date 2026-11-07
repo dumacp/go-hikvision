@@ -59,58 +59,70 @@ func New(host, user, pass string, timeout time.Duration) *Client {
 // Host returns the address this client talks to, for logging.
 func (c *Client) Host() string { return c.host }
 
-func (c *Client) send(ctx context.Context, method, path string, body []byte, auth string) (*http.Response, error) {
-	var reader io.Reader
-	if body != nil {
-		reader = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://"+c.host+path, reader)
-	if err != nil {
-		return nil, err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", `application/xml; charset="UTF-8"`)
-	}
-	if len(auth) > 0 {
-		req.Header.Set("Authorization", auth)
-	}
-	return c.hc.Do(req)
-}
-
-// do performs one ISAPI call: the device answers 401 with a Digest challenge, and the
-// request is replayed once with the computed Authorization header.
+// abrir hace la llamada con el desafío Digest: la cámara responde 401 y la petición se
+// repite una vez con el Authorization calculado. Devuelve la respuesta con el cuerpo
+// SIN leer; cerrarlo es responsabilidad de quien llama.
 //
-// It returns the response body. A body that is a ResponseStatus reporting failure is
-// returned as an error even when the HTTP status is 200, which does happen.
-func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]byte, error) {
-	resp, err := c.send(ctx, method, path, body, "")
+// hc permite usar un cliente sin plazo total para las descargas largas, que se acotan
+// por ctx.
+func (c *Client) abrir(ctx context.Context, hc *http.Client, method, path string, body []byte) (*http.Response, error) {
+	send := func(auth string) (*http.Response, error) {
+		var reader io.Reader
+		if body != nil {
+			reader = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, "http://"+c.host+path, reader)
+		if err != nil {
+			return nil, err
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", `application/xml; charset="UTF-8"`)
+		}
+		if len(auth) > 0 {
+			req.Header.Set("Authorization", auth)
+		}
+		return hc.Do(req)
+	}
+	resp, err := send("")
 	if err != nil {
 		return nil, fmt.Errorf("isapi %s %s: %w", method, path, err)
 	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
+	}
 
+	header := resp.Header.Get("WWW-Authenticate")
+	// Drain before reusing the connection.
+	io.Copy(ioutil.Discard, io.LimitReader(resp.Body, maxBody))
+	resp.Body.Close()
+
+	ch, err := parseChallenge(header)
+	if err != nil {
+		return nil, fmt.Errorf("isapi %s %s: %w", method, path, err)
+	}
+	c.nc++
+	auth, err := ch.authorization(c.user, c.pass, method, path, c.nc)
+	if err != nil {
+		return nil, fmt.Errorf("isapi %s %s: %w", method, path, err)
+	}
+	// Only one retry, on purpose: see ErrUnauthorized.
+	if resp, err = send(auth); err != nil {
+		return nil, fmt.Errorf("isapi %s %s: %w", method, path, err)
+	}
 	if resp.StatusCode == http.StatusUnauthorized {
-		header := resp.Header.Get("WWW-Authenticate")
-		// Drain before reusing the connection.
-		io.Copy(ioutil.Discard, io.LimitReader(resp.Body, maxBody))
 		resp.Body.Close()
+		return nil, fmt.Errorf("isapi %s %s: %w", method, path, ErrUnauthorized)
+	}
+	return resp, nil
+}
 
-		ch, err := parseChallenge(header)
-		if err != nil {
-			return nil, fmt.Errorf("isapi %s %s: %w", method, path, err)
-		}
-		c.nc++
-		auth, err := ch.authorization(c.user, c.pass, method, path, c.nc)
-		if err != nil {
-			return nil, fmt.Errorf("isapi %s %s: %w", method, path, err)
-		}
-		if resp, err = c.send(ctx, method, path, body, auth); err != nil {
-			return nil, fmt.Errorf("isapi %s %s: %w", method, path, err)
-		}
-		// Only one retry, on purpose: see ErrUnauthorized.
-		if resp.StatusCode == http.StatusUnauthorized {
-			resp.Body.Close()
-			return nil, fmt.Errorf("isapi %s %s: %w", method, path, ErrUnauthorized)
-		}
+// do performs one ISAPI call (see abrir) and returns the response body. A body that is a
+// ResponseStatus reporting failure is returned as an error even when the HTTP status is
+// 200, which does happen.
+func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	resp, err := c.abrir(ctx, c.hc, method, path, body)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 
