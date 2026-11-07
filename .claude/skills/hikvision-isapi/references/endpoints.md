@@ -274,13 +274,28 @@ Bonus para auditoría: **el OSD lleva quemados la fecha, la hora y los contadore
 4. **No se puede extraer el video de un evento recién ocurrido.** Un recorte con post-roll termina
    en el futuro respecto del instante del evento, así que esa parte todavía no está grabada y la
    verificación de cobertura falla. Hay que esperar a que la ventana completa quede grabada más un
-   margen. El índice de la cámara **no** va atrasado: encuentra cobertura hasta 5 s atrás.
+   margen. En la **G0** el índice **no** va atrasado: encuentra cobertura hasta 5 s atrás. En la
+   **G1 (V4.2.2)** sí: hasta ~2 min, avanzando de a saltos, y además parte la grabación en
+   archivos de 5 min que la búsqueda devuelve como tramos separados y pegados. Ver punto 6.
 5. **El clip real puede empezar hasta un GOP antes del `starttime` pedido** (medido: 2 s a 20 fps),
    porque la cámara posiciona la reproducción en el keyframe anterior. Da más pre-roll que el
    configurado, nunca menos, pero el instante pedido no es el primer frame exacto.
 
-`isapi.SearchRecordings` y `isapi.HasCoverage` implementan la guarda del punto 1, y el paquete
-`video` la extracción en Go puro, sin ffmpeg.
+6. **En la G1 (V4.2.2) la búsqueda va en reloj de pared, de ida y de vuelta.** Medido el
+   2026-11-07: la ventana pedida en UTC da `NO MATCHES`; la misma con la hora local y `Z` da
+   `OK`, y el tramo devuelto (`08:58:59Z..09:03:59Z`) también es hora local con `Z`. La guía
+   oficial dice que `Z` es UTC y `CMSearchDescription` no tiene campo para elegir: se detecta.
+   El `starttime` del RTSP tiene el mismo comportamiento (ver el `CLAUDE.md`).
+
+`isapi.SearchRecordings` y `isapi.HasCoverage` implementan la guarda del punto 1.
+`HasCoverage` prueba UTC y luego hora local, une los tramos contiguos y distingue "no hay" de
+"el índice todavía no llega" (`Cobertura.Pendiente`). El paquete `video` hace la extracción en
+Go puro, sin ffmpeg.
+
+**Lo que NO existe en la G1**, revisado contra la cámara: `packDuration` (largo del archivo,
+documentado en la guía RaCM v2.0 en `/ISAPI/ContentMgmt/Storage/extension`) no aparece en sus
+capacidades, que solo traen `LoopEnable` y `printLogSaveEnable`; `/ISAPI/ContentMgmt/record/advanced`
+da 404. No hay forma de acortar los archivos ni de apurar el índice desde ISAPI.
 
 ### El framerate de la grabación no es constante: los clips salen congelados
 

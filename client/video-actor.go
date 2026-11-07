@@ -25,6 +25,14 @@ const (
 	// recibirlo esa parte todavía no está grabada: pedirla de inmediato hace que la
 	// verificación de cobertura falle porque la ventana termina en el futuro.
 	videoSettleDelay = 4 * time.Second
+	// videoIndiceEspera es cuánto se sigue esperando, desde el primer intento, a que el
+	// índice de grabaciones de la cámara alcance el final de la ventana. Medido en la G1
+	// (V4.2.2): el índice va hasta ~2 min atrasado y avanza de a saltos, así que a los
+	// videoSettleDelay la ventana casi nunca figura grabada aunque ya lo esté. Pasado
+	// este plazo se da por "sin grabación".
+	videoIndiceEspera = 3 * time.Minute
+	// videoIndiceReintento es cada cuánto se vuelve a preguntar mientras tanto.
+	videoIndiceReintento = 20 * time.Second
 	// videoMinPostRoll es el video que debe quedar DESPUÉS de un evento para que su
 	// cruce entre completo en el clip. Es lo que limita cuántos eventos seguidos
 	// pueden compartir una misma ventana.
@@ -96,6 +104,13 @@ type VideoActor struct {
 	// consulta una sola vez y no en cada extracción.
 	camInfo map[int32]camIdent
 
+	// horaLocal recuerda, por puerta, si la cámara lee los instantes de búsqueda y de
+	// reproducción como su reloj de pared en vez de UTC (la G1 con V4.2.2). Se aprende de
+	// la primera búsqueda que encuentra grabación y ahorra el intento fallido en cada
+	// pasajero. Ausente es "no se sabe", y se empieza por UTC, la convención de campo.
+	// No se invalida en caliente: un cambio de cámaras reconstruye este actor.
+	horaLocal map[int32]bool
+
 	// hostname del equipo donde corre el binario, resuelto una vez al construir el
 	// actor: identifica de qué gateway salió el clip cuando todos suben al mismo lugar.
 	hostname string
@@ -116,6 +131,13 @@ type videoJob struct {
 	when    time.Time
 	counter int64
 	uid     string
+	// primerIntento es cuándo se buscó por primera vez la grabación de este evento, con
+	// el reloj del GATEWAY (no el de la cámara, que puede estar corrido): es lo que
+	// acota videoIndiceEspera. Cero si todavía no se intentó.
+	primerIntento time.Time
+	// noAntes posterga el próximo intento cuando el índice de la cámara iba atrasado,
+	// también con el reloj del gateway.
+	noAntes time.Time
 }
 
 // msgVideoDone avisa que terminó una extracción; lo manda la goroutine al actor.
@@ -142,6 +164,15 @@ type msgVideoDone struct {
 	ident camIdent
 	// metas son las rutas de los sidecars escritos, en el mismo orden que group.
 	metas []string
+	// horaLocal es la convención de hora con la que la cámara respondió, válida solo si
+	// horaConocida: la búsqueda o el recorte lo confirmaron en esta pasada.
+	horaLocal    bool
+	horaConocida bool
+	// reintentar indica que el índice de la cámara todavía no llegaba al final de la
+	// ventana y queda plazo para esperarlo: el grupo vuelve a la cola.
+	reintentar bool
+	// indexadoHasta es hasta dónde llegaba ese índice, para el log.
+	indexadoHasta time.Time
 }
 
 // msgVideoTick despierta al actor cuando la ventana del primer pendiente ya terminó de
@@ -172,6 +203,7 @@ func NewVideoActor(cameras []string, user, pass, dir string, preRoll, duration t
 		minFree:  minFree,
 	}
 	a.camInfo = make(map[int32]camIdent)
+	a.horaLocal = make(map[int32]bool)
 	a.lastEvent = make(map[int32]time.Time)
 	// Sin información de ignition se asume encendida; ver el campo.
 	a.camaraEncendida = true
@@ -243,6 +275,13 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 		if len(msg.ident.serial) > 0 {
 			a.camInfo[anchor.door] = msg.ident
 		}
+		if msg.horaConocida {
+			if previa, ok := a.horaLocal[anchor.door]; !ok || previa != msg.horaLocal {
+				a.infoLog.Printf("la cámara de la puerta %d indexa sus grabaciones en %s",
+					anchor.door, map[bool]string{true: "hora local (reloj de pared)", false: "UTC"}[msg.horaLocal])
+			}
+			a.horaLocal[anchor.door] = msg.horaLocal
+		}
 		// El disco se informa antes de mirar el resultado de la extracción, porque
 		// condiciona todo lo demás y su aviso no depende de cómo salió este clip.
 		a.reportarEspacio(msg)
@@ -254,6 +293,24 @@ func (a *VideoActor) Receive(ctx actor.Context) {
 			// mensaje por pasajero repitiendo lo mismo hasta llenar el log.
 			a.buildLog.Printf("sin espacio para el video de la puerta %d (%s, %d evento(s))",
 				anchor.door, anchor.when.Format(time.RFC3339), len(msg.group))
+		case msg.reintentar:
+			// No se pierde nada: el grupo vuelve al frente de la cola y next lo reagrupa,
+			// así que los eventos que lleguen mientras tanto pueden sumarse al mismo clip.
+			a.buildLog.Printf("la cámara de la puerta %d tiene indexado hasta %s y la ventana "+
+				"de %s termina después: se reintenta en %v (%d evento(s))",
+				anchor.door, msg.indexadoHasta.Format("15:04:05"), anchor.when.Format("15:04:05"),
+				videoIndiceReintento, len(msg.group))
+			noAntes := time.Now().Add(videoIndiceReintento)
+			for i := range msg.group {
+				msg.group[i].noAntes = noAntes
+			}
+			a.pending = append(append(make([]videoJob, 0, len(msg.group)+len(a.pending)),
+				msg.group...), a.pending...)
+		case msg.sinCobertura && !msg.indexadoHasta.IsZero():
+			a.warnLog.Printf("sin grabación para %s en la cámara de la puerta %d, %d evento(s) "+
+				"sin video: tras %v el índice de la cámara sigue llegando solo hasta %s",
+				anchor.when.Format(time.RFC3339), anchor.door, len(msg.group),
+				videoIndiceEspera, msg.indexadoHasta.Format("15:04:05"))
 		case msg.sinCobertura:
 			a.warnLog.Printf("sin grabación para %s en la cámara de la puerta %d, %d evento(s) sin video",
 				anchor.when.Format(time.RFC3339), anchor.door, len(msg.group))
@@ -438,6 +495,12 @@ func (a *VideoActor) next(ctx actor.Context) {
 		}
 		espera = 0
 	}
+	// Un grupo que volvió a la cola porque el índice de la cámara iba atrasado espera su
+	// turno de reintento. Va con el reloj del gateway, así que no la toca el acote de
+	// arriba, que existe por la diferencia entre los dos relojes.
+	if r := time.Until(anchor.noAntes); r > espera {
+		espera = r
+	}
 	if espera > 0 {
 		if !a.tickPend {
 			a.tickPend = true
@@ -461,11 +524,20 @@ func (a *VideoActor) next(ctx actor.Context) {
 	}
 	a.pending = resto
 	a.working = true
+	// El plazo de espera del índice corre desde el primer intento del grupo, y los
+	// eventos que se suman en un reintento heredan el del ancla.
+	if group[0].primerIntento.IsZero() {
+		group[0].primerIntento = time.Now()
+	}
+	for i := range group {
+		group[i].primerIntento = group[0].primerIntento
+	}
 
 	self := ctx.Self()
 	system := ctx.ActorSystem()
 	host := a.cameraFor(anchor.door)
 	ident := a.camInfo[anchor.door]
+	preferLocal := a.horaLocal[anchor.door]
 	hostname := a.hostname
 
 	dir := filepath.Join(a.dir, anchor.when.Local().Format("2006-01-02"))
@@ -515,22 +587,36 @@ func (a *VideoActor) next(ctx actor.Context) {
 			}
 		}
 
-		rec, err := cli.HasCoverage(cctx, videoTrack, desde, hasta,
-			fmt.Sprintf("C0DE0001-0000-0000-0000-%012d", anchor.when.Unix()%1e12))
+		// La búsqueda prueba UTC y hora local; sin eso la G1 nunca tenía cobertura y el
+		// reintento en hora local de video.Extract no llegaba a correr.
+		cov, err := cli.HasCoverage(cctx, videoTrack, desde, hasta,
+			fmt.Sprintf("C0DE0001-0000-0000-0000-%012d", anchor.when.Unix()%1e12), preferLocal)
 		if err != nil {
 			done.err = fmt.Errorf("consultando grabaciones: %w", err)
 			system.Root.Send(self, done)
 			return
 		}
-		if rec == nil {
-			done.sinCobertura = true
+		horaLocal := cov.HoraLocal
+		if cov.Tramo != nil || cov.Pendiente {
+			done.horaLocal, done.horaConocida = horaLocal, true
+		}
+		if cov.Tramo == nil {
+			// La cámara viene grabando pero su índice no llega al final de la ventana:
+			// se vuelve a preguntar más tarde en vez de perder el clip.
+			if cov.Pendiente && time.Since(group[0].primerIntento) < videoIndiceEspera {
+				done.reintentar, done.indexadoHasta = true, cov.IndexadoHasta
+			} else {
+				done.sinCobertura, done.indexadoHasta = true, cov.IndexadoHasta
+			}
 			system.Root.Send(self, done)
 			return
 		}
 
+		// La convención que encontró la grabación es la misma que entiende la
+		// reproducción: se pasa resuelta y el recorte no paga el intento fallido.
 		res, err := video.Extract(cctx, video.Request{
 			Host: host, User: a.user, Pass: a.pass, Track: videoTrack,
-			Start: desde, Duration: a.duration, Dest: clip,
+			Start: desde, Duration: a.duration, Dest: clip, HoraLocal: horaLocal,
 		})
 		if err != nil {
 			done.err = err

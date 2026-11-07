@@ -140,6 +140,8 @@ Lo que todavía difiere es de transporte, y está absorbido:
 | namespace | `urn:psialliance-org` | `isapi.org/ver20` | el parser los ignora |
 | sabotaje | `scenechangedetection` | `shelteralarm` | ramas separadas, mismo `TAMPERING` |
 | `starttime` del RTSP | UTC | **reloj de pared** | `Request.HoraLocal`, detectado solo |
+| búsqueda de grabaciones | UTC | **reloj de pared**, ida y vuelta | `HasCoverage` prueba las dos y se cachea por puerta |
+| archivos e índice de grabación | sin medir | **archivos de 5 min**, índice **hasta ~2 min atrasado** | tramos unidos + reintento hasta 3 min |
 
 **La grafía de `statisticalMethods` no es cosmética.** Medido el mismo día en el mismo gateway:
 `192.168.186.91` escribió `timeRange` 16 veces y `192.168.186.93` escribió `TimeRange` 21 veces.
@@ -369,6 +371,48 @@ G0 sí quiere UTC. `Request.HoraLocal` elige, y `Extract` lo resuelve solo: **in
 un equipo desplegado no puede regresionar por esto. `Result.HoraLocal` dice cuál funcionó, para
 cachearlo por cámara y ahorrar el intento fallido.
 
+**La búsqueda de grabaciones tiene el mismo problema, y por correr ANTES tapaba el arreglo
+anterior.** `POST /ISAPI/ContentMgmt/search` en la G1 lee los instantes de la petición como su
+reloj de pared y **responde** los tramos igual, todos con `Z`. Medido el 2026-11-07, misma
+ventana de hace 5 a 2 minutos:
+
+```
+pedida en UTC         13:59:40Z..14:02:40Z  -> NO MATCHES
+pedida en hora local  08:59:40Z..09:02:40Z  -> OK, tramo 08:58:59Z..09:03:59Z
+```
+
+Como `HasCoverage` es la guarda previa, cada evento de la G1 terminaba en `sin grabación` y
+el reintento en hora local de `Extract` nunca llegaba a ejecutarse. Ahora `HasCoverage` prueba
+UTC primero y la hora local después —con lo que las cámaras en campo no cambian—, reinterpreta
+en esa misma convención los tramos que devuelve, e informa en `Cobertura.HoraLocal` cuál
+funcionó. `VideoActor` la guarda por puerta (`horaLocal`) y la pasa a la búsqueda **y** al
+recorte, así que desde el segundo pasajero no hay intentos fallidos. Un desfase explícito
+(`-05:00`) nunca se reinterpreta: solo la `Z`, que es la que miente. La documentación oficial
+dice lo contrario —`Z` es UTC— y no tiene ningún campo para elegir la convención: es
+comportamiento del firmware, por eso se detecta.
+
+**Y la G1 tiene además dos rarezas del índice, sin ajuste posible.** Revisado: ni el track,
+ni `Storage/extension` (cuyas capacidades no declaran el `packDuration` de la guía RaCM), ni
+los PDF de `docs/` exponen nada que las controle.
+
+- **Graba en archivos de 5 minutos** y la búsqueda devuelve un tramo por archivo, pegados
+  (`09:11:21..09:16:21`, `09:16:21..`). Exigir que UN tramo cubra la ventana rechazaba toda
+  ventana que cruzara un corte — uno de cada ~19 pasos. `unirTramos` une los contiguos con un
+  hueco de hasta 2 s.
+- **El índice va hasta ~2 minutos atrasado y avanza de a saltos** (consultado cada 15 s: a las
+  09:16:10 terminaba en 09:14:25, y después quedó más de un minuto clavado en 09:16:55). Con
+  la espera fija de `videoSettleDelay` la ventana casi nunca figuraba grabada. La búsqueda mira
+  ahora `BusquedaAtras` (3 min) antes de la ventana: si la cámara viene grabando desde antes y el
+  índice no llega al final, devuelve `Pendiente` en vez de "no hay", y el grupo vuelve a la cola
+  cada `videoIndiceReintento` (20 s) hasta `videoIndiceEspera` (3 min, con el reloj del
+  gateway). Verificado de punta a punta: un cruce salió al primer reintento, el otro a la
+  primera.
+
+**El costo del reintento**: mientras un grupo espera su turno, la cola de video espera con él,
+así que en un vehículo con dos cámaras el clip de la otra puede salir hasta unos 2 minutos
+tarde. El conteo no se toca. Pasado el plazo, el WARN dice hasta dónde llegaba el índice, para
+no confundirlo con una cámara que no graba.
+
 **Y la lección que costó cara: un `500` significa "no hay grabación EN ESE INSTANTE", no "esta
 cámara no graba".** Leerlo como lo segundo llevó a cambiar una microSD, formatear cuatro veces,
 reiniciar cinco, hacer un reset de fábrica —que borró la calibración de conteo y dejó la puerta
@@ -384,7 +428,8 @@ Cuatro cosas medidas contra una cámara real que explican el diseño:
   queda con el nombre de un evento y muestra otro momento.
 - **La ventana termina después del evento**, así que al recibirlo esa parte todavía no está
   grabada. El actor espera `videoSettleDelay` tras el final de la ventana antes de pedirla; sin esa
-  espera la verificación de cobertura falla siempre.
+  espera la verificación de cobertura falla siempre. Medido en la G0; en la G1 el índice va más
+  atrasado y hace falta el reintento descrito arriba.
 - **La reproducción va a tiempo real**: un recorte de 10 s tarda 10 s. Se extrae de a uno con cola
   acotada, y por eso el trabajo va en goroutine y nunca dentro de `Receive`.
 - **Un salto del reloj de la cámara invalida los pendientes** de esa puerta: su marca de tiempo ya
