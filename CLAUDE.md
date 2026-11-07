@@ -450,6 +450,17 @@ los PDF de `docs/` exponen nada que las controle.
   (`09:11:21..09:16:21`, `09:16:21..`). Exigir que UN tramo cubra la ventana rechazaba toda
   ventana que cruzara un corte — uno de cada ~19 pasos. `unirTramos` une los contiguos con un
   hueco de hasta 2 s.
+- **En cada cambio de archivo la cámara deja ~0.9 s SIN GRABAR.** Medido el 2026-11-07 en una
+  ráfaga en el gateway: el archivo nuevo empezó a las 10:42:53 y los tres clips que cruzaban el
+  corte tienen el mismo hueco de **0.87 s** en el mismo instante real (10:42:52.1), mientras
+  que los que no lo cruzaban tienen 0.10 s, lo normal a 12 fps. Es de la cámara: el binario
+  empalma bien y `ffmpeg` decodifica esos clips sin errores, pero un cruce que caiga justo ahí
+  se ve con un salto de menos de un segundo. No hay forma de evitarlo desde acá. Y los
+  archivos **no duran siempre 5 minutos**: en el mismo día hubo `10:35:35..10:37:53` y
+  `09:26:21..09:28:38`, de 2 min 18 s, sin causa identificada.
+- **Cruzar un corte encarece la extracción**, porque `Download` entrega el archivo desde su
+  comienzo: los tres clips de esa ráfaga que leyeron el archivo anterior entero tardaron
+  **7.5 s** en el gateway armv7, y los dos que caían al principio del archivo nuevo, **< 1 s**.
 - **El índice va hasta ~2 minutos atrasado y avanza de a saltos** (consultado cada 15 s: a las
   09:16:10 terminaba en 09:14:25, y después quedó más de un minuto clavado en 09:16:55). Con
   la espera fija de `videoSettleDelay` la ventana casi nunca figuraba grabada. La búsqueda mira
