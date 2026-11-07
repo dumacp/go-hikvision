@@ -117,16 +117,27 @@ func init() {
 	// borde del clip o afuera. Con 10s/16s los tres cruces de una fila entraron en los
 	// segundos 7 a 11 de la ventana.
 	flag.DurationVar(&videoPreRoll, "videoPreRoll", 10*time.Second,
-		"how much video to keep before the event, so the crossing itself is in the clip")
+		"video kept BEFORE the first pass of a clip. It covers the camera's delay: the event\n"+
+			"arrives 2 to 7 s after the physical crossing, so a shorter pre-roll can leave the\n"+
+			"crossing out of the clip")
 	flag.DurationVar(&videoDuration, "videoDuration", 16*time.Second,
-		"clip duration of a single pass: -videoPreRoll before it and the rest after it")
+		"length of the clip of a SINGLE pass: -videoPreRoll before it and the rest\n"+
+			"(16s - 10s = 6s by default) after it. In a burst that rest is kept after the\n"+
+			"LAST pass, so the clip can be longer (see -videoBurstGap)")
 	// Encadenar ráfagas: medido el 2026-11-07, 6 pasos en 27 s daban 5 clips casi iguales
 	// con la ventana fija; encadenados son uno de 43 s y la mitad del tamaño.
 	flag.DurationVar(&videoBurstGap, client.FlagVideoBurstGap, 10*time.Second,
-		"a pass up to this long after the previous one of the same door goes to the same clip, "+
-			"which grows to keep video after it; 0 disables it (one fixed window per clip)")
+		"one clip per burst: a pass of the same door that comes at most this long after the\n"+
+			"previous one goes to the SAME clip, and the clip grows to keep the post-roll after\n"+
+			"it. Example with the defaults: passes at :00, :06 and :12 give one clip from\n"+
+			"-10s to +18s (28 s) instead of three overlapping 16 s clips.\n"+
+			"0 = one fixed -videoDuration clip per pass (the behavior up to 1.0.41).\n"+
+			"Also settable from the platform as videoBurstGap, in seconds")
 	flag.DurationVar(&videoMaxDuration, client.FlagVideoMaxDuration, 60*time.Second,
-		"longest clip a burst can grow to; past it the next pass opens a new clip")
+		"longest clip a burst can grow to; the pass that would go past it starts a new\n"+
+			"clip. It bounds the size of each file to upload (~25 KB/s, so 60 s is ~1.5 MB).\n"+
+			"A value below -videoDuration is raised to it. Also settable from the platform as\n"+
+			"videoMaxDuration, in seconds")
 	flag.IntVar(&videoQueue, "videoQueue", 500,
 		"maximum pending extractions; playback runs in real time, so a burst queues up")
 	// El piso protege la boltdb del conteo, que vive en la misma partición: quedarse sin

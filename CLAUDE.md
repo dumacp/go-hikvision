@@ -339,6 +339,38 @@ llegaron, y volverían los duplicados. Se absorben los pendientes de la misma pu
 caiga en la ventana con al menos `videoMinPostRoll` de video después, para que ningún cruce quede
 cortado en el borde.
 
+#### Cómo se arma un clip: cuatro flags que van juntos
+
+```
+        -videoPreRoll            post-roll = -videoDuration − -videoPreRoll
+       |<--- 10 s --->|<-- pasos de la ráfaga -->|<--- 6 s --->|
+     inicio         paso 1   paso 2 ... paso N              fin del clip
+                      |<= 10 s =>|   cada paso a ≤ -videoBurstGap del anterior
+
+     duración total ≤ -videoMaxDuration (60 s)
+```
+
+| flag | plataforma | default | qué hace |
+|---|---|---|---|
+| `-videoPreRoll` | — | 10 s | video **antes del primer paso**. Cubre el retraso de la cámara: el evento llega entre 2 y 7 s **después** del cruce físico |
+| `-videoDuration` | — | 16 s | clip de **un paso solo**: el pre-roll antes y el resto (6 s) después. En una ráfaga esos 6 s van después del **último** paso |
+| `-videoBurstGap` | `videoBurstGap` (s) | 10 s | un paso de la misma puerta que llega a lo sumo este tiempo después del anterior va al **mismo** clip, que crece. `0` = un clip fijo por paso, como hasta la 1.0.41 |
+| `-videoMaxDuration` | `videoMaxDuration` (s) | 60 s | tope del clip; el paso que lo haría pasar abre uno nuevo. Acota el archivo a subir (~25 KB/s → 60 s ≈ 1.5 MB). Por debajo de `-videoDuration` se sube a ese valor |
+
+Con los defaults:
+
+| pasos | clips |
+|---|---|
+| uno a las 10:00:00 | 09:59:50–10:00:06 (16 s), igual que siempre |
+| 10:00:00, :06 y :12 | **uno**, 09:59:50–10:00:18 (28 s) |
+| 10:00:00 y 10:00:15 | dos de 16 s: los separan 15 s, más que `-videoBurstGap` |
+| gente subiendo cada 5 s durante 2 min | clips de hasta 60 s, uno detrás de otro |
+
+Las dos palancas de datos móviles son distintas: **`-videoMaxDuration` acota cada archivo**,
+**`-videoBurstGap` decide cuánto "tiempo muerto" entre pasos se graba** dentro de un clip —con
+10 s, hasta 10 s sin nadie—. Ninguna acota el consumo por hora: en una parada con mucha gente
+salen varios clips seguidos, y eso lo tiene que regular quien los sube.
+
 **Y una ráfaga se ENCADENA en un solo clip que crece** (`armarRafaga`). La ventana fija no
 alcanzaba con una fila de gente: con pasos cada 5–6 s solo absorbía los que caían a 4 s, y
 salía un clip por paso repitiendo casi el mismo video. Medido el 2026-11-07 en FLO-W7-0138, 6
