@@ -35,12 +35,13 @@ func videoFactory(user, pass string, minFree uint64) func(client.Efectiva) *acto
 		}
 		vid := client.NewVideoActor(cfg.Camaras, user, pass, cfg.VideoDir,
 			videoPreRoll, videoDuration, videoQueue, minFree)
+		vid.SetRafaga(cfg.VideoBurstGap, cfg.VideoMaxDuration)
 		vid.SetLogError(errlog).SetLogWarn(warnlog).SetLogInfo(infolog).SetLogBuild(buildlog)
 		if debug {
 			vid.WithDebug()
 		}
-		infolog.Printf("video extraction enabled: dir=%q preRoll=%v duration=%v queue=%d minFree=%d MB",
-			cfg.VideoDir, videoPreRoll, videoDuration, videoQueue, minFree>>20)
+		infolog.Printf("video extraction enabled: dir=%q preRoll=%v duration=%v burstGap=%v maxDuration=%v queue=%d minFree=%d MB",
+			cfg.VideoDir, videoPreRoll, videoDuration, cfg.VideoBurstGap, cfg.VideoMaxDuration, videoQueue, minFree>>20)
 		// Vale avisarlo fuerte: sin piso, la extracción llena la partición hasta el final,
 		// y ahí vive la boltdb del conteo. Se pierde el acumulado del vehículo, que es
 		// mucho más caro que perder unos clips.

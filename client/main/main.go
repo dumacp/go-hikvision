@@ -33,6 +33,8 @@ var encryptCreds bool
 var videoDir string
 var videoPreRoll time.Duration
 var videoDuration time.Duration
+var videoBurstGap time.Duration
+var videoMaxDuration time.Duration
 var videoQueue int
 var videoMinFreeMB int64
 var withoutEventID bool
@@ -116,7 +118,15 @@ func init() {
 	// segundos 7 a 11 de la ventana.
 	flag.DurationVar(&videoPreRoll, "videoPreRoll", 10*time.Second,
 		"how much video to keep before the event, so the crossing itself is in the clip")
-	flag.DurationVar(&videoDuration, "videoDuration", 16*time.Second, "clip duration")
+	flag.DurationVar(&videoDuration, "videoDuration", 16*time.Second,
+		"clip duration of a single pass: -videoPreRoll before it and the rest after it")
+	// Encadenar ráfagas: medido el 2026-11-07, 6 pasos en 27 s daban 5 clips casi iguales
+	// con la ventana fija; encadenados son uno de 43 s y la mitad del tamaño.
+	flag.DurationVar(&videoBurstGap, client.FlagVideoBurstGap, 10*time.Second,
+		"a pass up to this long after the previous one of the same door goes to the same clip, "+
+			"which grows to keep video after it; 0 disables it (one fixed window per clip)")
+	flag.DurationVar(&videoMaxDuration, client.FlagVideoMaxDuration, 60*time.Second,
+		"longest clip a burst can grow to; past it the next pass opens a new clip")
 	flag.IntVar(&videoQueue, "videoQueue", 500,
 		"maximum pending extractions; playback runs in real time, so a burst queues up")
 	// El piso protege la boltdb del conteo, que vive en la misma partición: quedarse sin

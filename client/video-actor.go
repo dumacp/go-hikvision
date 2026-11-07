@@ -112,6 +112,11 @@ type VideoActor struct {
 	// No se invalida en caliente: un cambio de cámaras reconstruye este actor.
 	horaLocal map[int32]bool
 
+	// burstGap y maxDuration encadenan una ráfaga en un solo clip (ver armarRafaga). Con
+	// burstGap en cero se vuelve a la ventana fija de siempre.
+	burstGap    time.Duration
+	maxDuration time.Duration
+
 	// sinDescarga marca las puertas cuya cámara no ofrece /ISAPI/ContentMgmt/download
 	// (la G0 responde methodNotAllowed): ahí se extrae por RTSP sin volver a intentar la
 	// descarga. Es propiedad del modelo, así que se aprende una vez por puerta.
@@ -466,6 +471,84 @@ func (a *VideoActor) enqueue(ctx actor.Context, msg *messages.Event) {
 	a.next(ctx)
 }
 
+// rafaga es un grupo de pasos de una misma puerta que van a un solo clip.
+type rafaga struct {
+	// indices son las posiciones en la cola de los pasos del grupo; el primero es el
+	// ancla (la posición 0).
+	indices []int
+	// desde y hasta son la ventana del clip; ultimo, el último paso del grupo.
+	desde, hasta, ultimo time.Time
+}
+
+// armarRafaga decide qué pasos de la cola van al clip que abre el primero.
+//
+// La ventana de un paso solo es la de siempre: preRoll antes y (duration - preRoll)
+// después. Un paso de la misma puerta entra al grupo si:
+//
+//   - cae dentro de esa ventana con al menos videoMinPostRoll de cola, que es la regla de
+//     antes y vale siempre; o
+//   - llega hasta burstGap después del último paso del grupo y el clip no pasa de
+//     maxDuration. Entonces la ventana se ALARGA hasta (duration - preRoll) después de él.
+//
+// Por qué: con pasos cada 5–6 s —una fila de gente— la ventana fija solo absorbía los que
+// caían a 4 s, y salía un clip por paso repitiendo casi el mismo video. Medido el
+// 2026-11-07 en FLO-W7-0138: 6 pasos en 27 s dieron 5 clips y 2.4 MB, casi todo
+// repetido; encadenados son un clip de 43 s y ~1.1 MB, con un sidecar por paso.
+//
+// Con burstGap en cero no hay encadenamiento. maxDuration acota una ráfaga que no termina
+// —una parada con mucha gente—: al llegar al tope se cierra el clip y lo que sigue abre
+// otro. Un maxDuration menor que duration se toma como duration.
+func armarRafaga(cola []videoJob, preRoll, duration, burstGap, maxDuration time.Duration) rafaga {
+	ancla := cola[0]
+	post := duration - preRoll
+	r := rafaga{
+		indices: []int{0},
+		desde:   ancla.when.Add(-preRoll),
+		ultimo:  ancla.when,
+	}
+	r.hasta = r.desde.Add(duration)
+	if maxDuration < duration {
+		maxDuration = duration
+	}
+	for i := 1; i < len(cola); i++ {
+		j := cola[i]
+		if j.door != ancla.door || j.when.Before(r.desde) {
+			continue
+		}
+		// La regla de siempre: dentro de la ventana, con cola suficiente.
+		if !j.when.After(r.hasta.Add(-videoMinPostRoll)) {
+			r.indices = append(r.indices, i)
+			if j.when.After(r.ultimo) {
+				r.ultimo = j.when
+			}
+			// Encadenando, todo paso del grupo se gana su cola completa, no solo los
+			// videoMinPostRoll de la regla vieja. Sin encadenar la ventana queda fija,
+			// como siempre.
+			if fin := j.when.Add(post); burstGap > 0 && fin.After(r.hasta) &&
+				fin.Sub(r.desde) <= maxDuration {
+				r.hasta = fin
+			}
+			continue
+		}
+		// Encadenar: sigue la ráfaga y el clip no se pasa del tope.
+		if burstGap > 0 && !j.when.After(r.ultimo.Add(burstGap)) &&
+			j.when.Add(post).Sub(r.desde) <= maxDuration {
+			r.indices = append(r.indices, i)
+			r.ultimo = j.when
+			if fin := j.when.Add(post); fin.After(r.hasta) {
+				r.hasta = fin
+			}
+		}
+	}
+	return r
+}
+
+// SetRafaga encadena los pasos seguidos de una puerta en un solo clip (ver armarRafaga).
+func (a *VideoActor) SetRafaga(burstGap, maxDuration time.Duration) *VideoActor {
+	a.burstGap, a.maxDuration = burstGap, maxDuration
+	return a
+}
+
 // next arranca la siguiente extracción si no hay ninguna en curso.
 //
 // Agrupa: el primer pendiente define la ventana y se absorben todos los demás de la
@@ -479,13 +562,19 @@ func (a *VideoActor) next(ctx actor.Context) {
 	}
 
 	anchor := a.pending[0]
-	desde := anchor.when.Add(-a.preRoll)
-	hasta := desde.Add(a.duration)
+	// La ráfaga se arma ANTES de esperar: su final, y no el del primer paso, es lo que
+	// hay que dejar grabar.
+	rafaga := armarRafaga(a.pending, a.preRoll, a.duration, a.burstGap, a.maxDuration)
+	desde, hasta := rafaga.desde, rafaga.hasta
 
-	// Esperar aquí, ANTES de agrupar, a que la cámara haya grabado toda la ventana.
+	// Esperar aquí, ANTES de extraer, a que la cámara haya grabado toda la ventana.
 	// Además de ser necesario para que exista el video, deja que la cola se llene:
 	// agrupar al recibir el primer evento daría un grupo de uno solo, porque los pasos
 	// siguientes todavía no llegaron, y volverían los clips duplicados.
+	//
+	// Con ráfagas hay una segunda condición: no cerrar la ráfaga mientras pueda llegar un
+	// paso que la continúe, o sea hasta burstGap después del último. Cada vez que se
+	// despierta se vuelve a armar, así que un paso que llegó en el medio la alarga.
 	//
 	// Ojo con los dos relojes: `hasta` viene del evento, o sea del reloj de la CÁMARA,
 	// mientras time.Until mide contra el reloj del GATEWAY. Si no coinciden, la espera
@@ -494,12 +583,19 @@ func (a *VideoActor) next(ctx actor.Context) {
 	// sin un solo error en el log — el conteo funcionaba y los clips simplemente no
 	// aparecían.
 	//
-	// El máximo físico de esta espera es preRoll + duration + settle. Más que eso solo
-	// puede venir de una diferencia de relojes, así que se acota y se avisa. Extraer de
-	// inmediato es seguro: la cámara indexa sus grabaciones con su propio reloj, que es
-	// el mismo del evento, y HasCoverage verifica la cobertura antes de pedir el tramo.
+	// El máximo físico de esta espera es preRoll + la ventana + burstGap + settle. Más que
+	// eso solo puede venir de una diferencia de relojes, así que se acota y se avisa.
+	// Extraer de inmediato es seguro: la cámara indexa sus grabaciones con su propio
+	// reloj, que es el mismo del evento, y HasCoverage verifica la cobertura antes de
+	// pedir el tramo.
 	espera := time.Until(hasta.Add(videoSettleDelay))
-	if maxEspera := a.preRoll + a.duration + videoSettleDelay + videoClockSlack; espera > maxEspera {
+	if a.burstGap > 0 {
+		if r := time.Until(rafaga.ultimo.Add(a.burstGap + time.Second)); r > espera {
+			espera = r
+		}
+	}
+	maxEspera := a.preRoll + a.duration + a.burstGap + videoSettleDelay + videoClockSlack
+	if espera > maxEspera {
 		if !a.clockWarned {
 			a.clockWarned = true
 			a.warnLog.Printf("el reloj del equipo y el de la cámara difieren en ~%v: la hora "+
@@ -524,18 +620,19 @@ func (a *VideoActor) next(ctx actor.Context) {
 		return
 	}
 
-	// Último instante que todavía deja videoMinPostRoll de cola dentro del clip.
-	limite := hasta.Add(-videoMinPostRoll)
-
-	group := []videoJob{anchor}
-	resto := a.pending[:0:0]
-	for _, j := range a.pending[1:] {
-		if j.door == anchor.door && !j.when.Before(desde) && !j.when.After(limite) {
-			group = append(group, j)
-			continue
-		}
-		resto = append(resto, j)
+	group := make([]videoJob, 0, len(rafaga.indices))
+	enGrupo := make(map[int]bool, len(rafaga.indices))
+	for _, i := range rafaga.indices {
+		group = append(group, a.pending[i])
+		enGrupo[i] = true
 	}
+	resto := a.pending[:0:0]
+	for i, j := range a.pending {
+		if !enGrupo[i] {
+			resto = append(resto, j)
+		}
+	}
+	ventana := hasta.Sub(desde)
 	a.pending = resto
 	a.working = true
 	// El plazo de espera del índice corre desde el primer intento del grupo, y los
@@ -563,7 +660,7 @@ func (a *VideoActor) next(ctx actor.Context) {
 	clip := uniquePath(dir, fmt.Sprintf("%s_%s_p%d_%s",
 		anchor.when.Local().Format("20060102T150405"), hostname, anchor.door, anchor.uid), ".mp4")
 
-	plazo := a.duration*3 + videoSettleDelay + 30*time.Second
+	plazo := ventana*3 + videoSettleDelay + 30*time.Second
 	cctx, cancel := context.WithTimeout(context.Background(), plazo)
 	a.cancel = cancel
 
@@ -643,7 +740,7 @@ func (a *VideoActor) next(ctx actor.Context) {
 			res, err = video.ExtraerDescarga(cctx, video.Descarga{
 				Abrir:    cli.Download,
 				Archivos: archivos,
-				Start:    desde, Duration: a.duration, Dest: clip,
+				Start:    desde, Duration: ventana, Dest: clip,
 			})
 			if errors.Is(err, isapi.ErrDescargaNoSoportada) {
 				done.sinDescarga = true
@@ -655,7 +752,7 @@ func (a *VideoActor) next(ctx actor.Context) {
 			// reproducción: se pasa resuelta y el recorte no paga el intento fallido.
 			res, err = video.Extract(cctx, video.Request{
 				Host: host, User: a.user, Pass: a.pass, Track: videoTrack,
-				Start: desde, Duration: a.duration, Dest: clip, HoraLocal: horaLocal,
+				Start: desde, Duration: ventana, Dest: clip, HoraLocal: horaLocal,
 			})
 		}
 		if err != nil {
@@ -672,7 +769,7 @@ func (a *VideoActor) next(ctx actor.Context) {
 			meta := uniquePath(dir, fmt.Sprintf("%s_%s_p%d_%s_%s",
 				j.when.Local().Format("20060102T150405"), hostname, j.door,
 				tipoTexto(j.tipo), j.uid), ".json")
-			if err := writeSidecar(meta, j, hostname, host, ident, clip, desde, a.duration, res); err != nil {
+			if err := writeSidecar(meta, j, hostname, host, ident, clip, desde, ventana, res); err != nil {
 				// El clip ya está en disco; el sidecar es complementario.
 				done.err = fmt.Errorf("clip escrito pero falló el sidecar: %w", err)
 				continue

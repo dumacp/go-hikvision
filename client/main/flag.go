@@ -37,6 +37,8 @@ func configuracionBase(camerasByDoor []string) client.Efectiva {
 		VideoFrameRate:      videoFrameRate,
 		VideoEnabled:        videoEnabled,
 		VideoDir:            videoDir,
+		VideoBurstGap:       videoBurstGap,
+		VideoMaxDuration:    videoMaxDuration,
 		CameraPowerGPIO:     cameraPowerGPIO,
 		CameraPowerOffLevel: cameraPowerOffLevel,
 	}

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Configuración que la plataforma publica en el atributo DEV_CAMERACOUNT_CONFIG.
@@ -40,9 +41,16 @@ const (
 	FlagVideoFrameRate      = "videoFrameRate"
 	FlagVideoEnabled        = "videoEnabled"
 	FlagVideoDir            = "videoDir"
+	FlagVideoBurstGap       = "videoBurstGap"
+	FlagVideoMaxDuration    = "videoMaxDuration"
 	FlagCameraPowerGPIO     = "cameraPowerGPIO"
 	FlagCameraPowerOffLevel = "cameraPowerOffLevel"
 )
+
+// MaxVideoSegundos acota videoBurstGap y videoMaxDuration desde la plataforma. Un clip de
+// diez minutos ya no es "el video de un paso", y un valor así casi seguro es un error de
+// unidades —milisegundos escritos como segundos—.
+const MaxVideoSegundos = 600
 
 // CamaraConf es una cámara con su puerta y los dos switches de conteo de esa puerta.
 //
@@ -74,15 +82,19 @@ type CamaraConf struct {
 // medido es que un objeto que OMITE un booleano lo apaga igual, pisando el flag con el que
 // se arrancó el equipo. Con punteros, ausente es nil y no toca nada.
 type Configuracion struct {
-	Camaras             []CamaraConf `json:"cameras"`
-	NtpServer           *string      `json:"ntpServer"`
-	VideoCodec          *string      `json:"videoCodec"`
-	SmartCodec          *string      `json:"smartCodec"`
-	VideoFrameRate      *int         `json:"videoFrameRate"`
-	VideoEnabled        *bool        `json:"videoEnabled"`
-	VideoDir            *string      `json:"videoDir"`
-	CameraPowerGPIO     *int         `json:"cameraPowerGPIO"`
-	CameraPowerOffLevel *int         `json:"cameraPowerOffLevel"`
+	Camaras        []CamaraConf `json:"cameras"`
+	NtpServer      *string      `json:"ntpServer"`
+	VideoCodec     *string      `json:"videoCodec"`
+	SmartCodec     *string      `json:"smartCodec"`
+	VideoFrameRate *int         `json:"videoFrameRate"`
+	VideoEnabled   *bool        `json:"videoEnabled"`
+	VideoDir       *string      `json:"videoDir"`
+	// VideoBurstGap y VideoMaxDuration van en SEGUNDOS enteros: el JSON no tiene un tipo
+	// de duración, y un "10s" en texto sería otro formato que validar.
+	VideoBurstGap       *int `json:"videoBurstGap"`
+	VideoMaxDuration    *int `json:"videoMaxDuration"`
+	CameraPowerGPIO     *int `json:"cameraPowerGPIO"`
+	CameraPowerOffLevel *int `json:"cameraPowerOffLevel"`
 }
 
 // Efectiva es la configuración ya resuelta: lo que el binario de verdad va a usar. No tiene
@@ -100,6 +112,10 @@ type Efectiva struct {
 
 	VideoEnabled bool
 	VideoDir     string
+	// VideoBurstGap y VideoMaxDuration encadenan los pasos seguidos en un solo clip; con
+	// VideoBurstGap en cero cada clip es la ventana fija de siempre.
+	VideoBurstGap    time.Duration
+	VideoMaxDuration time.Duration
 
 	CameraPowerGPIO     int
 	CameraPowerOffLevel int
@@ -212,6 +228,12 @@ func (c *Configuracion) Validar() error {
 	if c.CameraPowerOffLevel != nil && *c.CameraPowerOffLevel != 0 && *c.CameraPowerOffLevel != 1 {
 		return fmt.Errorf("cameraPowerOffLevel %d inválido, solo 0 o 1", *c.CameraPowerOffLevel)
 	}
+	if c.VideoBurstGap != nil && (*c.VideoBurstGap < 0 || *c.VideoBurstGap > MaxVideoSegundos) {
+		return fmt.Errorf("videoBurstGap %d fuera de rango, de 0 a %d segundos", *c.VideoBurstGap, MaxVideoSegundos)
+	}
+	if c.VideoMaxDuration != nil && (*c.VideoMaxDuration < 0 || *c.VideoMaxDuration > MaxVideoSegundos) {
+		return fmt.Errorf("videoMaxDuration %d fuera de rango, de 0 a %d segundos", *c.VideoMaxDuration, MaxVideoSegundos)
+	}
 	if c.VideoDir != nil {
 		d := strings.TrimSpace(*c.VideoDir)
 		if d != "" && !strings.HasPrefix(d, "/") {
@@ -297,6 +319,12 @@ func Resolver(base Efectiva, p *Configuracion, fijados map[string]bool) Efectiva
 	if p.VideoDir != nil && !fijado(FlagVideoDir) {
 		out.VideoDir = strings.TrimSpace(*p.VideoDir)
 	}
+	if p.VideoBurstGap != nil && !fijado(FlagVideoBurstGap) {
+		out.VideoBurstGap = time.Duration(*p.VideoBurstGap) * time.Second
+	}
+	if p.VideoMaxDuration != nil && !fijado(FlagVideoMaxDuration) {
+		out.VideoMaxDuration = time.Duration(*p.VideoMaxDuration) * time.Second
+	}
 	if p.CameraPowerGPIO != nil && !fijado(FlagCameraPowerGPIO) {
 		out.CameraPowerGPIO = *p.CameraPowerGPIO
 	}
@@ -365,7 +393,8 @@ func (e Efectiva) Diff(n Efectiva) Cambios {
 		e.SmartCodec != n.SmartCodec || e.VideoFrameRate != n.VideoFrameRate {
 		c.Camara = true
 	}
-	if e.VideoEnabled != n.VideoEnabled || e.VideoDir != n.VideoDir {
+	if e.VideoEnabled != n.VideoEnabled || e.VideoDir != n.VideoDir ||
+		e.VideoBurstGap != n.VideoBurstGap || e.VideoMaxDuration != n.VideoMaxDuration {
 		c.Video = true
 	}
 	if e.CameraPowerGPIO != n.CameraPowerGPIO || e.CameraPowerOffLevel != n.CameraPowerOffLevel {
@@ -446,6 +475,8 @@ func (e Efectiva) Describir(fijados map[string]bool) string {
 	linea("videoFrameRate", strconv.Itoa(e.VideoFrameRate), FlagVideoFrameRate)
 	linea("videoEnabled", strconv.FormatBool(e.VideoEnabled), FlagVideoEnabled)
 	linea("videoDir", vacioComoGuion(e.VideoDir), FlagVideoDir)
+	linea("videoBurstGap", e.VideoBurstGap.String(), FlagVideoBurstGap)
+	linea("videoMaxDuration", e.VideoMaxDuration.String(), FlagVideoMaxDuration)
 	linea("cameraPowerGPIO", strconv.Itoa(e.CameraPowerGPIO), FlagCameraPowerGPIO)
 	linea("cameraPowerOffLevel", strconv.Itoa(e.CameraPowerOffLevel), FlagCameraPowerOffLevel)
 	return strings.TrimRight(b.String(), "\n")

@@ -3,6 +3,7 @@ package client
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // Fixture con la forma exacta que la plataforma publica dentro de
@@ -317,5 +318,39 @@ func TestDescribirDiceDeDondeSalioCadaValor(t *testing.T) {
 	}
 	if !strings.Contains(txt, "192.168.186.93") {
 		t.Errorf("el banner no lista las cámaras:\n%s", txt)
+	}
+}
+
+// La ráfaga se configura en segundos enteros desde la plataforma, y el flag explícito gana.
+func TestRafagaDesdeLaPlataforma(t *testing.T) {
+	b := base()
+	b.VideoBurstGap, b.VideoMaxDuration = 10*time.Second, 60*time.Second
+
+	e := Resolver(b, parsear(t, `{"videoBurstGap":8,"videoMaxDuration":45}`), nil)
+	if e.VideoBurstGap != 8*time.Second || e.VideoMaxDuration != 45*time.Second {
+		t.Errorf("la plataforma debía fijar 8 s y 45 s: %v %v", e.VideoBurstGap, e.VideoMaxDuration)
+	}
+	if !b.Diff(e).Video || b.Diff(e).Camara {
+		t.Errorf("cambiar la ráfaga rehace solo el video: %+v", b.Diff(e))
+	}
+
+	e = Resolver(b, parsear(t, `{"videoBurstGap":0}`), map[string]bool{FlagVideoMaxDuration: true})
+	if e.VideoBurstGap != 0 {
+		t.Errorf("un 0 explícito apaga el encadenamiento: %v", e.VideoBurstGap)
+	}
+	e = Resolver(b, parsear(t, `{"videoMaxDuration":30}`), map[string]bool{FlagVideoMaxDuration: true})
+	if e.VideoMaxDuration != 60*time.Second {
+		t.Errorf("con -videoMaxDuration en la línea de comandos la plataforma no lo mueve: %v", e.VideoMaxDuration)
+	}
+	if e = Resolver(b, parsear(t, `{}`), nil); e.VideoBurstGap != 10*time.Second {
+		t.Errorf("ausente no toca nada: %v", e.VideoBurstGap)
+	}
+}
+
+func TestRafagaFueraDeRangoSeRechaza(t *testing.T) {
+	for _, raw := range []string{`{"videoBurstGap":-1}`, `{"videoMaxDuration":60000}`} {
+		if _, err := ParseConfiguracion([]byte(raw)); err == nil {
+			t.Errorf("%s debía rechazarse", raw)
+		}
 	}
 }

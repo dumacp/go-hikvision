@@ -156,7 +156,7 @@ Sin audio: se extrae solo la pista de video.
 | `clip` | **nombre del `.mp4` que contiene este cruce**, sin ruta |
 | `clip_start_requested` | el instante que se le **pidió** a la cámara |
 | `offset_s` | en qué segundo del clip ocurre este cruce |
-| `duration_s` | duración pedida del clip |
+| `duration_s` | duración pedida del clip, en segundos. **No es siempre la misma**: un paso solo da la ventana base (16 s), pero los pasos seguidos de una puerta se encadenan en un clip que crece hasta 60 s. Leé el campo, no asumas un valor |
 | `camera` | IP de la cámara |
 | `camera_serial` | identidad estable del equipo |
 | `camera_mac` | MAC de la cámara |

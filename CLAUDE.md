@@ -302,7 +302,8 @@ exigen.
 
 Deshabilitada salvo que se pase `-videoDir`, y además exige `-camera` y credenciales: sin las tres
 cosas el actor no se crea y el conteo sigue igual. Flags: `-videoPreRoll` (10s), `-videoDuration`
-(16s), `-videoQueue` (500), `-videoMinFree` (512 MiB).
+(16s), `-videoBurstGap` (10s), `-videoMaxDuration` (60s), `-videoQueue` (500), `-videoMinFree`
+(512 MiB). Los dos de ráfaga también se configuran desde la plataforma.
 
 Los defaults de 10 y 16 segundos están medidos, no elegidos: el `dateTime` del evento llega entre
 **2 y 7 segundos después del cruce físico**, y el retraso varía. Con 5 s de pre-roll el cruce
@@ -337,6 +338,28 @@ si agrupara al recibirlo, el primer grupo sería de uno solo porque los pasos si
 llegaron, y volverían los duplicados. Se absorben los pendientes de la misma puerta cuyo evento
 caiga en la ventana con al menos `videoMinPostRoll` de video después, para que ningún cruce quede
 cortado en el borde.
+
+**Y una ráfaga se ENCADENA en un solo clip que crece** (`armarRafaga`). La ventana fija no
+alcanzaba con una fila de gente: con pasos cada 5–6 s solo absorbía los que caían a 4 s, y
+salía un clip por paso repitiendo casi el mismo video. Medido el 2026-11-07 en FLO-W7-0138, 6
+pasos en 27 s: **5 clips y 2.4 MB, tres de ellos con los mismos 30 segundos**. Ahora un paso de
+la misma puerta que llega hasta `-videoBurstGap` (10 s) después del anterior entra al clip, y
+el clip se alarga para dejar `videoDuration - videoPreRoll` (6 s) de video después de él; esa
+ráfaga es **un clip de 43 s**. Reglas:
+
+- **un paso solo sigue dando exactamente la ventana de siempre** (10 s antes, 6 después), y
+  con `-videoBurstGap 0` se vuelve al comportamiento anterior entero;
+- **`-videoMaxDuration` (60 s) corta una ráfaga que no termina** —una parada con mucha gente—:
+  el paso que no entra abre el clip siguiente. Un tope menor que `-videoDuration` no achica
+  la ventana de un paso;
+- **la ráfaga se cierra recién `videoBurstGap` después del último paso**, para no cortarla
+  mientras puede llegar uno que la continúe. Cada vez que el actor despierta la vuelve a
+  armar, así que un paso que llegó en el medio la alarga. En la G1 esa espera queda tapada
+  por la del índice atrasado;
+- **`duration_s` del sidecar es la duración de ESE clip**, ya no siempre 16. La forma del JSON
+  no cambia, pero un consumidor que asumiera 16 fijos tiene que leer el campo;
+- por RTSP la extracción es a tiempo real, así que un clip de 43 s ocupa la cola 43 s. Sigue
+  siendo menos que los 5 × 16 = 80 s de la ventana fija.
 
 El clip y cada sidecar se escriben como `.part` y se **renombran al terminar**: el rename es atómico, así que el
 proceso que recorra el directorio nunca ve un archivo a medio escribir y no hace falta coordinar.

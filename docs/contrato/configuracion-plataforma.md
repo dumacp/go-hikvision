@@ -38,6 +38,8 @@ publicar el atributo no alcanza si el binario de parámetros no lo mapea.
   "videoFrameRate": 12,
   "videoEnabled": true,
   "videoDir": "/SD/video265/",
+  "videoBurstGap": 10,
+  "videoMaxDuration": 60,
   "cameraPowerGPIO": 165,
   "cameraPowerOffLevel": 1
 }
@@ -55,6 +57,8 @@ publicar el atributo no alcanza si el binario de parámetros no lo mapea.
 | `videoFrameRate` | int | cuadros por segundo del stream principal |
 | `videoEnabled` | bool | **prende y apaga la extracción de clips** |
 | `videoDir` | string | ruta absoluta donde se guardan los clips |
+| `videoBurstGap` | int, **segundos**, 0..600 | un paso que llega hasta este tiempo después del anterior de la misma puerta va al mismo clip; `0` vuelve a un clip de ventana fija por paso |
+| `videoMaxDuration` | int, **segundos**, 0..600 | tope de duración de un clip que crece por una ráfaga |
 | `cameraPowerGPIO` | int | línea de sysfs que corta la energía de la cámara; `0` deshabilita |
 | `cameraPowerOffLevel` | int | `0` o `1`: el nivel que significa APAGAR |
 
@@ -115,7 +119,7 @@ los actores que el cambio afecta y los acumulados quedan intactos.
 | `zeroOpenState`, `countWithCloseDoor` | nada; se aplica en el lugar |
 | `cameras` | el clasificador de eventos, el keep-alive, el mantenimiento de cámara y el video |
 | `ntpServer`, `videoCodec`, `smartCodec`, `videoFrameRate` | el mantenimiento de cámara |
-| `videoEnabled`, `videoDir` | la extracción de video |
+| `videoEnabled`, `videoDir`, `videoBurstGap`, `videoMaxDuration` | la extracción de video |
 | `cameraPowerGPIO`, `cameraPowerOffLevel` | la línea de GPIO, con una secuencia segura |
 
 **Apagar `videoEnabled` descarta la cola de extracciones pendientes.** El conteo no se ve
