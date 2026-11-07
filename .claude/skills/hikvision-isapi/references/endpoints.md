@@ -253,8 +253,8 @@ propio `search`, y el `2026-08-18T15:59:00` del ejemplo original.
 Bonus para auditoría: **el OSD lleva quemados la fecha, la hora y los contadores**
 (`Enter:16 / Leave:15`), así que un clip se puede cotejar visualmente contra el evento.
 
-**No funciona** — `POST /ISAPI/ContentMgmt/download` devuelve `statusCode 4` /
-`methodNotAllowed` en este modelo, igual que `download/capabilities` y `search/profile`. La vía
+**No funciona en la G0** — `POST /ISAPI/ContentMgmt/download` devuelve `statusCode 4` /
+`methodNotAllowed` en ese modelo (en la G1 V4.2.2 sí funciona, ver punto 7), igual que `download/capabilities` y `search/profile`. La vía
 "solo HTTP, sin RTSP ni ffmpeg" **no existe acá**, aunque el PDF la documente.
 
 **Tres trampas operativas, todas medidas:**
@@ -285,7 +285,14 @@ Bonus para auditoría: **el OSD lleva quemados la fecha, la hora y los contadore
    2026-11-07: la ventana pedida en UTC da `NO MATCHES`; la misma con la hora local y `Z` da
    `OK`, y el tramo devuelto (`08:58:59Z..09:03:59Z`) también es hora local con `Z`. La guía
    oficial dice que `Z` es UTC y `CMSearchDescription` no tiene campo para elegir: se detecta.
-   El `starttime` del RTSP tiene el mismo comportamiento (ver el `CLAUDE.md`).
+   **Ojo: el RTSP de reproducción de la G1 está roto** —devuelve un stream truncado e idéntico
+   para cualquier `starttime`, aunque el `500` en UTC parezca confirmar la misma convención—.
+   La grabación sí se baja bien con `POST /ISAPI/ContentMgmt/download` (punto 7).
+7. **`/ISAPI/ContentMgmt/download` SÍ funciona en la G1 (V4.2.2)**, al revés que en la G0
+   (abajo). Hay que mandarle el `playbackURI` **tal cual lo devuelve la búsqueda**, con `name` y
+   `size`: entrega el archivo entero de ese tramo (hasta 5 min) como MPEG-PS con H.265, y la
+   imagen sale perfecta. Con un `playbackURI` armado a mano —16 s, sin `name` ni `size`— se
+   cuelga sin entregar un byte.
 
 `isapi.SearchRecordings` y `isapi.HasCoverage` implementan la guarda del punto 1.
 `HasCoverage` prueba UTC y luego hora local, une los tramos contiguos y distingue "no hay" de

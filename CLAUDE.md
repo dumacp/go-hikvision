@@ -139,7 +139,7 @@ Lo que todavía difiere es de transporte, y está absorbido:
 | `statisticalMethods` | `timeRange` | **`TimeRange`** | `esConteoDeVentana` compara sin distinguir mayúsculas |
 | namespace | `urn:psialliance-org` | `isapi.org/ver20` | el parser los ignora |
 | sabotaje | `scenechangedetection` | `shelteralarm` | ramas separadas, mismo `TAMPERING` |
-| `starttime` del RTSP | UTC | **reloj de pared** | `Request.HoraLocal`, detectado solo |
+| reproducción por RTSP | sirve | **ROTA**: devuelve un stream truncado, el mismo para cualquier hora | descarga por HTTP (en curso) |
 | búsqueda de grabaciones | UTC | **reloj de pared**, ida y vuelta | `HasCoverage` prueba las dos y se cachea por puerta |
 | archivos e índice de grabación | sin medir | **archivos de 5 min**, índice **hasta ~2 min atrasado** | tramos unidos + reintento hasta 3 min |
 
@@ -356,20 +356,37 @@ despierta cuando pasa un pasajero, y el disco hay que verlo venir aunque no pase
 del gateway, así que sale **una vez por ciclo**, con el primer resultado sano, no una vez por
 cámara.
 
-**El `starttime` de la URL NO va siempre en UTC, y el sufijo `Z` miente.** Medido contra la
-DS-2XM6825G1 (V4.2.2) a las 17:53 locales, UTC−5:
+**La reproducción por RTSP de la G1 (V4.2.2) está ROTA, y durante una semana se la dio por
+buena.** Medido el 2026-10-30 contra la DS-2XM6825G1 a las 17:53 locales, UTC−5:
 
 ```
 starttime=20261030T225358Z   (UTC)              -> 500 Internal Server Error
 starttime=20261030T175358Z   (reloj de pared)   -> 161 KB, 194 fotos, hueco 0.10 s
 ```
 
-Esa cámara lee el campo como **su hora local**, así que pedirle en UTC es pedirle un instante
-cinco horas en el futuro — y un futuro sin grabar responde `500`, igual que una tarjeta rota. La
-G0 sí quiere UTC. `Request.HoraLocal` elige, y `Extract` lo resuelve solo: **intenta primero UTC
-—la convención de las cámaras en campo— y solo reintenta con la hora local si falla**, de modo que
-un equipo desplegado no puede regresionar por esto. `Result.HoraLocal` dice cuál funcionó, para
-cachearlo por cámara y ahorrar el intento fallido.
+De ahí se concluyó que la cámara lee el `starttime` como su hora local y se agregó
+`Request.HoraLocal` (`Extract` intenta UTC y reintenta en hora local; `Result.HoraLocal` dice
+cuál funcionó). **La segunda línea no era un clip válido, y nadie miró la imagen.** Medido el
+2026-11-07, decodificando cuadros con `ffmpeg`:
+
+| cómo se pide | qué devuelve |
+|---|---|
+| en vivo, `/Streaming/channels/101` | perfecto |
+| grabado, RTSP, **siete** `starttime` distintos entre 09:26:25 y 09:26:55 | **el mismo clip byte por byte**: solo la franja superior se decodifica, el resto verde, y el OSD marca `2026-11-06` |
+| grabado, RTSP, con el `playbackURI` exacto de la búsqueda (con `name` y `size`) | el mismo stream roto |
+| grabado, RTSP, de ayer | igual de roto |
+| grabado, `POST /ISAPI/ContentMgmt/download` con el `playbackURI` de la búsqueda | **perfecto**: OSD `2026-11-07 09:26:23`, MPEG-PS con H.265 |
+| grabado, `download` con un `playbackURI` de 16 s sin `name`/`size` | se cuelga sin entregar nada |
+
+El stream de RTSP trae ~25 KB/s cuando los archivos de la SD pesan ~247 KB/s, y con `ffmpeg`
+sale idéntico, así que no es el extractor: **la grabación está bien y la reproducción por RTSP de
+este firmware no**. `HoraLocal` sigue en el código porque no estorba —en la G0 el primer intento
+en UTC funciona—, pero su premisa sobre el RTSP de la G1 no está demostrada. Lo que sí está
+medido es la convención de la **búsqueda** (abajo). La G1 se extrae por la descarga HTTP.
+
+**Y la verificación del clip tiene que mirar la imagen.** `max_gap_s` y `fps_effective` salieron
+normales en los clips rotos (191 muestras, hueco 0.23 s): miden la cadencia de las muestras, no
+si se pueden decodificar. Un clip "exitoso" no está verificado hasta que alguien vio un cuadro.
 
 **La búsqueda de grabaciones tiene el mismo problema, y por correr ANTES tapaba el arreglo
 anterior.** `POST /ISAPI/ContentMgmt/search` en la G1 lee los instantes de la petición como su
@@ -405,8 +422,9 @@ los PDF de `docs/` exponen nada que las controle.
   ahora `BusquedaAtras` (3 min) antes de la ventana: si la cámara viene grabando desde antes y el
   índice no llega al final, devuelve `Pendiente` en vez de "no hay", y el grupo vuelve a la cola
   cada `videoIndiceReintento` (20 s) hasta `videoIndiceEspera` (3 min, con el reloj del
-  gateway). Verificado de punta a punta: un cruce salió al primer reintento, el otro a la
-  primera.
+  gateway). Verificado contra la cámara: un cruce encontró su tramo al primer reintento, el
+  otro a la primera. **Los clips que se extrajeron después salieron rotos**, por el RTSP (arriba):
+  la búsqueda está resuelta, la extracción de la G1 no.
 
 **El costo del reintento**: mientras un grupo espera su turno, la cola de video espera con él,
 así que en un vehículo con dos cámaras el clip de la otra puede salir hasta unos 2 minutos
@@ -419,7 +437,9 @@ reiniciar cinco, hacer un reset de fábrica —que borró la calibración de con
 sin contar— y actualizar el firmware, todo persiguiendo un fallo que estaba en el parámetro. La
 señal que lo delataba estuvo disponible desde el principio: **el stream en vivo funcionaba
 perfecto mientras la reproducción fallaba.** Cuando un equipo responde bien por un camino y mal
-por otro, el sospechoso es cómo se le pregunta, no el hardware.
+por otro, el sospechoso es cómo se le pregunta, no el hardware. **Y la segunda mitad de la
+lección, del 2026-11-07:** un `200` con bytes tampoco prueba nada — el "arreglo" de ese día
+devolvía un stream roto, y se lo dio por bueno durante una semana porque nadie abrió el clip.
 
 Cuatro cosas medidas contra una cámara real que explican el diseño:
 
