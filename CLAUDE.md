@@ -711,8 +711,16 @@ compran poco disco.
 
 Dos precisiones del endpoint (`/ISAPI/ContentMgmt/record/tracks/101`):
 
-- **se aplica en caliente**: responde `statusCode 1` y al leerlo de vuelta ya está activo. No
-  lo confundas con `/Streaming/channels/101`, que responde 7 y exige reiniciar;
+- **en la G0 se aplica en caliente**: responde `statusCode 1` y al leerlo de vuelta ya está
+  activo. No lo confundas con `/Streaming/channels/101`, que responde 7 y exige reiniciar;
+- **la G1 (V4.2.2) responde `statusCode 1` y NO guarda nada**: medido el 2026-11-07, ni el
+  horario completo ni solo el inicio; la cámara siguió en `03:15:00-24:00:00`. Durante dos
+  ciclos el binario escribió cada media hora y logueó "corregida" sin haber corregido nada.
+  Ahora **se relee después de escribir** y, si no quedó, WARN una vez y no se reintenta en esa
+  cámara hasta el próximo arranque (`horarioGiveUp`, mismo criterio que `encoderGiveUp`);
+- **y si el horario actual ya CUBRE el pedido, no se escribe** (`isapi.ScheduleCovers`):
+  grabar de más no es un problema. El `03:15-24:00` de la G1 cubre el `04:00-23:59` por
+  defecto, así que en la práctica esa cámara ni siquiera recibe el PUT;
 - **la cámara redondea al minuto**: pedir `23:59:59` queda guardado como `23:59:00`. Por eso
   `isapi.SetScheduleWindow` compara **por minuto** — comparando por segundo daría diferencia
   siempre y escribiría en cada ciclo.

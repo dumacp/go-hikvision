@@ -179,6 +179,10 @@ type camTimeState struct {
 	// porque un valor pedido no quedó guardado y reintentarlo es un PUT por ciclo para
 	// siempre. Hay que corregir el flag, no insistir.
 	encoderGiveUp bool
+	// horarioGiveUp deja de escribir el horario de grabación de esta cámara hasta el
+	// próximo arranque: lo escribió con OK y al releerlo no estaba. Medido en la G1 (V4.2.2),
+	// que responde statusCode 1 a todo PUT del horario y no guarda ninguno.
+	horarioGiveUp bool
 }
 
 // msgCameraTick dispara un ciclo de revisión.
@@ -239,6 +243,9 @@ type msgCameraResult struct {
 	// cámara recortó el valor en silencio. Sin esto el ciclo reescribiría para siempre.
 	encoderStuck  []string
 	stuckObserved string
+	// horarioIgnorado: el horario se escribió con OK y al releerlo seguía igual.
+	horarioIgnorado bool
+	horarioVisto    string
 }
 
 // NewCameraActor crea el actor.
@@ -349,6 +356,7 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 		door    int32
 		host    string
 		encoder bool
+		horario bool
 	}, 0, len(a.cameras))
 	for i, host := range a.cameras {
 		if len(host) == 0 {
@@ -362,7 +370,8 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 			door    int32
 			host    string
 			encoder bool
-		}{int32(i), host, encoderListo && (st == nil || !st.encoderGiveUp)})
+			horario bool
+		}{int32(i), host, encoderListo && (st == nil || !st.encoderGiveUp), st == nil || !st.horarioGiveUp})
 	}
 	// El disco del gateway se mide acá, una vez por ciclo y en el hilo del actor: es un
 	// Statfs local de microsegundos, no vale una goroutine, y el dato es del equipo y no
@@ -390,7 +399,7 @@ func (a *CameraActor) runCycle(ctx actor.Context) {
 	go func() {
 		defer cancel()
 		for _, t := range trabajos {
-			res := a.checkCamera(cctx, t.door, t.host, ref, t.encoder)
+			res := a.checkCamera(cctx, t.door, t.host, ref, t.encoder, t.horario)
 			system.Root.Send(self, res)
 		}
 		// Una marca final para liberar el candado, con door negativo.
@@ -496,9 +505,31 @@ func gpsTime(frame string) (time.Time, error) {
 	return t, nil
 }
 
+// primeraVentana devuelve "HH:MM:SS-HH:MM:SS" de la primera ventana del track, para el log.
+func primeraVentana(raw []byte) string {
+	s := string(raw)
+	var horas []string
+	for len(horas) < 2 {
+		abre := strings.Index(s, "<TimeOfDay>")
+		if abre < 0 {
+			break
+		}
+		cierra := strings.Index(s[abre:], "</TimeOfDay>")
+		if cierra < 0 {
+			break
+		}
+		horas = append(horas, s[abre+len("<TimeOfDay>"):abre+cierra])
+		s = s[abre+cierra:]
+	}
+	if len(horas) < 2 {
+		return "?"
+	}
+	return horas[0] + "-" + horas[1]
+}
+
 // checkCamera revisa y corrige una cámara. No escribe el reloj nunca.
 func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, ref time.Time,
-	escribirEncoder bool) *msgCameraResult {
+	escribirEncoder, escribirHorario bool) *msgCameraResult {
 	res := &msgCameraResult{door: door, host: host}
 	cli := isapi.New(host, a.user, a.pass, cameraHTTPTimeout)
 
@@ -594,9 +625,13 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 	// comprobaciones: LoopEnable queda sin mirar y se sigue.
 	trackRaw, errTrack := cli.GetTrackRaw(ctx, videoTrack)
 
-	// Horario de grabación. Se aplica en caliente: verificado que responde statusCode 1 y
-	// queda activo sin reiniciar, a diferencia de la configuración del encoder.
-	if len(a.want.RecordStart) > 0 && len(a.want.RecordEnd) > 0 {
+	// Horario de grabación. En la G0 se aplica en caliente: responde statusCode 1 y queda
+	// activo sin reiniciar. La G1 (V4.2.2) también responde 1 y NO lo guarda, así que
+	// después de escribir se relee — un OK no prueba nada, igual que con el encoder.
+	//
+	// Y si el horario actual ya CUBRE el pedido no se escribe: grabar de más no es un
+	// problema. La G1 trae 03:15-24:00, que cubre el 04:00-23:59 por defecto.
+	if len(a.want.RecordStart) > 0 && len(a.want.RecordEnd) > 0 && escribirHorario {
 		if errTrack != nil {
 			res.err = fmt.Errorf("leyendo el horario de grabación: %w", errTrack)
 			res.unauthorized = errors.Is(errTrack, isapi.ErrUnauthorized)
@@ -605,15 +640,28 @@ func (a *CameraActor) checkCamera(ctx context.Context, door int32, host string, 
 		if nuevo, cambios, err := isapi.SetScheduleWindow(trackRaw, a.want.RecordStart, a.want.RecordEnd); err != nil {
 			res.err = fmt.Errorf("armando el horario: %w", err)
 			return res
-		} else if cambios > 0 {
+		} else if cambios > 0 && !isapi.ScheduleCovers(trackRaw, a.want.RecordStart, a.want.RecordEnd) {
 			if err := cli.PutTrackRaw(ctx, videoTrack, nuevo); err != nil {
 				res.err = fmt.Errorf("escribiendo el horario de grabación: %w", err)
 				res.unauthorized = errors.Is(err, isapi.ErrUnauthorized)
 				return res
 			}
-			res.fixed = append(res.fixed, fmt.Sprintf("horario de grabación -> %s a %s (%d ventana(s))",
-				a.want.RecordStart, a.want.RecordEnd, cambios))
-			trackRaw = nuevo
+			releido, err := cli.GetTrackRaw(ctx, videoTrack)
+			switch {
+			case err != nil:
+				// No se pudo comprobar: no se declara corregido, y el próximo ciclo
+				// vuelve a mirar.
+				a.warnLog.Printf("cámara de la puerta %d (%s): horario escrito pero no se "+
+					"pudo releer: %s", door, host, err)
+			case isapi.ScheduleCovers(releido, a.want.RecordStart, a.want.RecordEnd):
+				res.fixed = append(res.fixed, fmt.Sprintf("horario de grabación -> %s a %s (%d ventana(s))",
+					a.want.RecordStart, a.want.RecordEnd, cambios))
+				trackRaw = releido
+			default:
+				res.horarioIgnorado = true
+				res.horarioVisto = primeraVentana(releido)
+				trackRaw = releido
+			}
 		}
 	}
 
@@ -997,6 +1045,13 @@ func (a *CameraActor) handleResult(ctx actor.Context, res *msgCameraResult) {
 	// Un valor que se escribió con OK y no quedó guardado. Se deja de intentar en esta
 	// cámara: reintentarlo es un PUT por ciclo para siempre, y lo que hay que corregir es
 	// el flag, no la cámara.
+	if res.horarioIgnorado {
+		st.horarioGiveUp = true
+		a.warnLog.Printf("cámara de la puerta %d (%s): el horario de grabación %s a %s se "+
+			"escribió con OK pero NO quedó guardado (la cámara sigue en %s). Hay que fijarlo "+
+			"a mano en la cámara; no se vuelve a intentar hasta el próximo arranque del binario",
+			res.door, res.host, a.want.RecordStart, a.want.RecordEnd, res.horarioVisto)
+	}
 	if len(res.encoderStuck) > 0 {
 		st.encoderGiveUp = true
 		a.errLog.Printf("cámara de la puerta %d (%s): %s se escribió con OK pero NO quedó "+

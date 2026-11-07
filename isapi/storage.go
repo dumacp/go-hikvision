@@ -185,6 +185,48 @@ func SetScheduleWindow(raw []byte, start, end string) ([]byte, int, error) {
 	return []byte(out.String()), cambios, nil
 }
 
+// ScheduleCovers dice si TODAS las ventanas del track ya cubren [start, end]: empiezan a
+// esa hora o antes y terminan a esa hora o después.
+//
+// Existe porque grabar de MÁS no es un problema y no justifica escribir. Medido el
+// 2026-11-07 en la DS-2XM6825G1 (V4.2.2): trae 03:15:00-24:00:00, que cubre de sobra un
+// 04:00-23:59 pedido, y además IGNORA cualquier PUT del horario respondiendo statusCode 1.
+// Sin esta comprobación el ciclo escribía cada media hora un cambio innecesario que la
+// cámara descartaba, y el log decía "corregida".
+//
+// Se compara por minuto, como SetScheduleWindow, y "24:00" vale como el fin del día
+// (ordena después de "23:59" como texto, así que no hace falta tratarlo aparte). Un track
+// sin ventanas no cubre nada.
+func ScheduleCovers(raw []byte, start, end string) bool {
+	if len(start) < 5 || len(end) < 5 {
+		return false
+	}
+	s := string(raw)
+	var horas []string
+	for {
+		abre := strings.Index(s, "<TimeOfDay>")
+		if abre < 0 {
+			break
+		}
+		cierra := strings.Index(s[abre:], "</TimeOfDay>")
+		if cierra < 0 {
+			break
+		}
+		horas = append(horas, s[abre+len("<TimeOfDay>"):abre+cierra])
+		s = s[abre+cierra:]
+	}
+	if len(horas) == 0 || len(horas)%2 != 0 {
+		return false
+	}
+	for i := 0; i < len(horas); i += 2 {
+		ini, fin := horas[i], horas[i+1]
+		if len(ini) < 5 || len(fin) < 5 || ini[:5] > start[:5] || fin[:5] < end[:5] {
+			return false
+		}
+	}
+	return true
+}
+
 // sameMinute compara dos HH:MM:SS ignorando los segundos, porque la cámara los redondea.
 func sameMinute(a, b string) bool {
 	if len(a) < 5 || len(b) < 5 {
