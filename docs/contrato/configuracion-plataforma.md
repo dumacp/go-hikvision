@@ -14,7 +14,7 @@ por cámara sin entrar por SSH a editar el lanzador de cada equipo.
 | **Tipo** | `string` que **contiene** JSON (doble codificación) |
 | **Bucket** | `<orgId>_CFG-PARAMS`, llave = hostname del gateway (o el `-id` que se pase) |
 | **Lo consume** | `go-hikvision` ≥ 1.0.41 |
-| **Lo transporta** | `go-params` ≥ la versión que mapea la clave, vía `nats-gwIot` |
+| **Lo transporta** | `go-params` ≥ **v1.0.4**, vía `nats-gwIot` |
 
 **La doble codificación no es un capricho y no se puede cambiar de un lado solo.** El parseo
 de `go-params` recorre el mapa plano y hace `v.(string)`; si el atributo viajara como objeto

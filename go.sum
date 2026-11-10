@@ -26,8 +26,8 @@ github.com/dumacp/go-gwiot v1.2.24-0.20261101194921-f2d0862b04ef h1:wUVgLz0z4iGw
 github.com/dumacp/go-gwiot v1.2.24-0.20261101194921-f2d0862b04ef/go.mod h1:V0BYgwNQe3x/UCiii7zzhYNOfKduyaqfPHbC7XELmOQ=
 github.com/dumacp/go-logs v0.0.1 h1:X6pBagK6lCgNyz+MluT1V3cvoHnJsZCSIz5pjYe9YBc=
 github.com/dumacp/go-logs v0.0.1/go.mod h1:nxB2d1DaPSLGnz+0zuR29N/YRq7THIVwQLDHf0jBSRc=
-github.com/dumacp/go-params v1.0.4-0.20261106182210-64e61f53dbce h1:IYA1KWUWVeRPqSvtaWYOFzaUrtz+k9khJs97dKW13vY=
-github.com/dumacp/go-params v1.0.4-0.20261106182210-64e61f53dbce/go.mod h1:tcKuV+HkQ7KbAjQCMSInv6206kSzUfDmBFmM9t62aqE=
+github.com/dumacp/go-params v1.0.4 h1:y7JZfb/IuO2L7Iy3fUu/iZyLBwf0eNmP6N15OmsdcF0=
+github.com/dumacp/go-params v1.0.4/go.mod h1:tcKuV+HkQ7KbAjQCMSInv6206kSzUfDmBFmM9t62aqE=
 github.com/dumacp/gpsnmea v0.0.0-20201110195359-2994f05cfb52 h1:2lzgBwOrKsWZcmqaCk1OgNcMAsHuUor4vc3WaEfYzVE=
 github.com/dumacp/gpsnmea v0.0.0-20201110195359-2994f05cfb52/go.mod h1:ZVDQY1pOKAVSjiLXPmvcPfQJkKDyREXJuW411QwP5D0=
 github.com/dumacp/pubsub v0.0.0-20200115200904-f16f29d84ee0 h1:5GOnGA5BlfSxREoT5lRHmShjHV/XXsZrns+MZwgV24s=

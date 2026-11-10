@@ -24,9 +24,10 @@ cd client/messages && ./protobuf.sh
 **Dependencias**: `go-doors` y `go-actors` se consumen por versión publicada (`v1.2.1` y
 `v0.1.0`); antes iban por `replace` al filesystem y ya no hace falta tenerlos clonados.
 
-`go-params` se consume por la versión publicada de la rama `feat/cameracount-config`
-(`v1.0.4-0.20261106182210-64e61f53dbce`), que es la que mapea `DEV_CAMERACOUNT_CONFIG`.
-Cuando esa rama entre a la principal de `go-params` y tenga tag, conviene subir a esa versión.
+`go-params` se consume por el tag **`v1.0.4`**, la primera versión de su rama principal que
+mapea `DEV_CAMERACOUNT_CONFIG`. Ojo al subirla en otros binarios: en esa misma versión
+`DEV_TQ_PARAMS` y `DEV_PCD_PARAMS` pasaron de estructura a string, y quien los lea como
+estructura deja de compilar. Acá no se usan.
 
 **Queda UN `replace`, y es obligatorio**: `github.com/asynkron/protoactor-go => ../../asynkron/protoactor-go`.
 El checkout local lleva dos parches que no existen en ningún commit publicado, y uno de ellos
