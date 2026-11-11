@@ -10,7 +10,7 @@ GPIO por sysfs, broker MQTT en `127.0.0.1:1883`).
 ```bash
 go build ./...                    # compila todo
 go vet ./...                      # limpio hoy
-go test ./...                     # FALLA hoy (ver "Deuda conocida")
+go test ./...                     # pasa completo; un FAIL es una regresión
 go run ./client/main -version     # imprime versión y sale con código 2
 
 # ejecución local típica (dos puertas: id 0 frontal, id 1 trasera)
@@ -87,7 +87,8 @@ El paquete [video/](video/) extrae un tramo grabado y lo escribe como MP4, en Go
 vías: la descarga HTTP del archivo grabado (`ExtraerDescarga`, con un lector de MPEG-PS propio)
 y la reproducción por RTSP (`Extract`, con `gortsplib` + `mediacommon`). Sin ffmpeg **a propósito**: el binario cross-compila a cualquier
 arquitectura con un solo `go build` y las credenciales nunca aparecen en la línea de comandos de
-otro proceso. Costo medido: +1.8 MB en armv7.
+otro proceso. Costo medido de esta parte: +1.8 MB en armv7. El binario entero pesa ~18 MB desde la
+1.0.41, por gRPC (ver "Configuración desde la plataforma").
 
 El paquete [isapi/](isapi/) es el transporte hacia la cámara: HTTP + XML con autenticación Digest
 (implementada a mano, la stdlib no la trae y no se agregó dependencia). Es deliberadamente tonto —
@@ -1262,6 +1263,12 @@ Ojo con el patrón: `ctx.Parent()` **sí** es correcto en los hijos (`EventActor
 
 ## Documentación de referencia (`docs/`)
 
+**[`README.md`](README.md) es el manual del operador**: qué hace el binario, requisitos, los 43
+flags en tablas por función (con cuáles se fijan también desde la plataforma), despliegue,
+verificación en el equipo, síntomas y limitaciones. Se quedó dos meses atrás —de la 1.0.39 a la
+1.0.43 sin tocarse— porque nada lo nombraba: **si agregás o cambiás un flag, actualizá su tabla
+ahí**, no solo el `-help` y este archivo.
+
 **[`docs/contrato/`](docs/contrato/)** documenta las dos fronteras hacia afuera, para quien
 implemente del lado de la plataforma: los eventos de MQTT (cuáles son nuevos y a cuáles se les
 agregaron campos), la ruta y el contenido de lo que queda en el bucket, y **cómo se identifica un
@@ -1287,3 +1294,5 @@ cgo a un `.so` propietario más SDL, y este binario nunca toca video.
 2. **No toques `showVersion`**; se sube aparte, cuando hay acuerdo de desplegar.
 3. Si tocaste el contrato MQTT o el XML de la cámara, actualiza la skill correspondiente
    (`mqtt-contract`, `hikvision-isapi`) — son la documentación viva de esas fronteras.
+4. Si agregaste o cambiaste un flag o un comportamiento visible para el operador, actualiza el
+   [`README.md`](README.md): su tabla de flags, "Síntomas y causas" o "Limitaciones conocidas".

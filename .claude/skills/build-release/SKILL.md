@@ -20,21 +20,22 @@ Corré el global y tratá cualquier `FAIL` como regresión tuya:
 go test ./...
 ```
 
-## Dependencias por `replace` — la causa #1 de builds roto
+## Dependencias: un solo `replace`, y es obligatorio
 
-[go.mod](../../../go.mod) resuelve tres módulos desde el filesystem, no desde la red:
+Todo se resuelve por versión publicada (`go-doors v1.2.1`, `go-actors v0.1.0`, `go-params
+v1.0.4`, `go-gwiot`...), **salvo** `protoactor-go`, que [go.mod](../../../go.mod) toma del
+filesystem:
 
 ```
-../go-doors                    → github.com/dumacp/go-doors
-../go-actors                   → github.com/dumacp/go-actors
 ../../asynkron/protoactor-go   → github.com/asynkron/protoactor-go
 ```
 
-El repo debe estar en `$GOPATH/src/github.com/dumacp/go-hikvision` con los hermanos presentes.
-Si el build falla con `module ... not found` o `directory ... does not exist`, verifica primero
-esas rutas — no toques `go.mod`. Y ten en cuenta que un cambio en cualquiera de esos tres repos
-entra al binario sin quedar registrado en este historial: al diagnosticar un comportamiento raro
-en campo, revisa también el estado de los repos hermanos.
+Ese clon lleva el parche que **evita un panic en armv7** (`SliceMap.GetBucket`, ver
+`CLAUDE.md`). Quitar el `replace` compila y pasa las pruebas en la PC, y el binario se cae al
+arrancar en el vehículo. El repo debe estar en `$GOPATH/src/github.com/dumacp/go-hikvision` con
+ese clon presente; si el build falla con `directory ... does not exist`, verificá esa ruta
+antes de tocar `go.mod`. Un cambio en ese clon entra al binario sin quedar registrado en este
+historial: al diagnosticar algo raro en campo, revisá también su estado.
 
 ## Cross-compile al gateway
 
@@ -50,7 +51,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
 
 **`armv7l` está verificado**: el binario corre en un gateway `FLO-W7-0036` con BusyBox 1.23.2,
 `/bin/sh` → bash, y `/SD` en `/dev/mmcblk1p1`. Sale estático y sin sección dinámica, así que no
-depende de la libc del equipo. Pesa ~14 MB.
+depende de la libc del equipo. Pesa **~18 MB** desde la 1.0.41: la configuración remota trae
+protoactor `remote` y con él gRPC (+5.8 MB medidos). Verificado también en `FLO-W7-0138`
+(i.MX6, kernel 4.1.15).
 
 **Nombra el artefacto con la versión Y el hash del commit.** La versión sola no identifica un
 binario: la constante se sube solo al desplegar, así que varios commits la comparten. En esta
